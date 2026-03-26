@@ -1,0 +1,83 @@
+﻿logging:
+  level: INFO
+
+pipeline:
+  device: auto
+  fps: 0
+  buffer_size: 2
+  max_frames: null
+  metrics_interval_sec: 2
+  sequence_len: 6
+
+ingestion:
+  rtsp_reconnect_sec: 2.0
+  rtsp_max_retries: 5
+  webcam_requested_fps: 60
+  webcam_width: 640
+  webcam_height: 360
+
+streams:
+  - stream_id: webcam_fall_fast
+    type: webcam
+    source: 0
+
+detection:
+  backend: none
+  model_path: models/yolo11n.pt
+  conf_threshold: 0.35
+  person_class_id: 0
+
+pose:
+  backend: ultralytics_pose
+  model_path: models/yolo11n-pose.pt
+  input_size: 256
+  match_iou_threshold: 0.1
+
+tracking:
+  iou_threshold: 0.3
+  max_misses: 15
+
+features:
+  min_keypoint_conf: 0.2
+  bed_zones:
+    - [80, 150, 280, 340]
+    - [360, 150, 560, 340]
+
+rules:
+  bed_edge_distance_px: 40.0
+  sitting_edge_seconds: 5.0
+  sudden_drop_vy: 180.0
+  lean_angle_deg: 30.0
+  lean_std_deg: 8.0
+  enable_sitting_edge_rule: false
+  enable_fall_rule: true
+  enable_lean_instability_rule: false
+
+temporal_model:
+  backend: none
+  model_path: models/temporal_gru.pt
+
+risk:
+  ml_weight: 0.0
+  medium_threshold: 0.45
+  high_threshold: 0.7
+  critical_threshold: 0.9
+  allow_ml_level_override: false
+
+output:
+  json_log_path: output/alerts_fall_fast.jsonl
+  enable_rest_api: false
+  rest_api_host: 0.0.0.0
+  rest_api_port: 8000
+  visualization:
+    enabled: true
+    show_bboxes: true
+    show_pose: true
+    show_tracks: true
+    show_risk: true
+    show_bed_zones: false
+    show_fps: true
+    keypoint_conf_threshold: 0.25
+    window_scale: 1.0
+    quit_key: q
+    quit_keys: [q, esc]

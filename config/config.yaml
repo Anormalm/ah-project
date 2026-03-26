@@ -1,0 +1,89 @@
+﻿logging:
+  level: INFO
+
+pipeline:
+  device: auto
+  fps: 15
+  buffer_size: 4
+  max_frames: null
+  metrics_interval_sec: 3
+  sequence_len: 16
+
+ingestion:
+  rtsp_reconnect_sec: 2.0
+  rtsp_max_retries: 5
+  webcam_requested_fps: 30
+  webcam_width: 640
+  webcam_height: 480
+
+streams:
+  - stream_id: webcam0
+    type: webcam
+    source: 0
+  # - stream_id: ward_rtsp
+  #   type: rtsp
+  #   source: rtsp://user:pass@host:554/stream1
+  # - stream_id: clip_file
+  #   type: video
+  #   source: data/sample.mp4
+
+detection:
+  backend: ultralytics # ultralytics | mock | none
+  model_path: models/yolo11n.pt
+  conf_threshold: 0.4
+  person_class_id: 0
+
+pose:
+  backend: ultralytics_pose # ultralytics_pose | movenet_torch | mock
+  model_path: models/yolo11n-pose.pt
+  input_size: 256
+  match_iou_threshold: 0.1
+
+tracking:
+  iou_threshold: 0.3
+  max_misses: 20
+
+features:
+  min_keypoint_conf: 0.2
+  bed_zones:
+    - [80, 150, 280, 340]
+    - [360, 150, 560, 340]
+
+rules:
+  bed_edge_distance_px: 40.0
+  sitting_edge_seconds: 5.0
+  sudden_drop_vy: 250.0
+  lean_angle_deg: 30.0
+  lean_std_deg: 8.0
+  enable_sitting_edge_rule: true
+  enable_fall_rule: true
+  enable_lean_instability_rule: true
+
+temporal_model:
+  backend: heuristic # torch_gru | heuristic | none
+  model_path: models/temporal_gru.pt
+
+risk:
+  ml_weight: 0.35
+  medium_threshold: 0.45
+  high_threshold: 0.7
+  critical_threshold: 0.9
+  allow_ml_level_override: true
+
+output:
+  json_log_path: output/alerts.jsonl
+  enable_rest_api: false
+  rest_api_host: 0.0.0.0
+  rest_api_port: 8000
+  visualization:
+    enabled: true
+    show_bboxes: true
+    show_pose: true
+    show_tracks: true
+    show_risk: true
+    show_bed_zones: true
+    show_fps: true
+    keypoint_conf_threshold: 0.2
+    window_scale: 1.0
+    quit_key: q
+    quit_keys: [q, esc]

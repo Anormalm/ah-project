@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from temporal.temporal_model import GRURiskNet, TemporalModelMeta
+from temporal.temporal_model import GRURiskNet, TinyTransformerRiskNet, TemporalModelMeta
 
 
 @dataclass
@@ -18,6 +18,7 @@ class TrainerConfig:
     decision_threshold: float = 0.5
     device: str = "cpu"
     seed: int = 42
+    model_type: str = "gru"
 
 
 def _set_seed(torch_module, seed: int) -> None:
@@ -66,7 +67,25 @@ def _roc_auc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
     return float(np.clip(auc, 0.0, 1.0))
 
 
-class GRURiskTrainer:
+def _build_model(torch_module, meta: TemporalModelMeta):
+    if meta.model_type == "transformer_lite":
+        return TinyTransformerRiskNet(
+            torch_module=torch_module,
+            input_size=meta.input_size,
+            hidden_size=meta.hidden_size,
+            num_layers=meta.num_layers,
+            attention_heads=meta.attention_heads,
+            ff_mult=meta.ff_mult,
+        ).model
+    return GRURiskNet(
+        torch_module=torch_module,
+        input_size=meta.input_size,
+        hidden_size=meta.hidden_size,
+        num_layers=meta.num_layers,
+    ).model
+
+
+class TemporalRiskTrainer:
     def __init__(self, cfg: TrainerConfig) -> None:
         self.cfg = cfg
         import torch
@@ -91,19 +110,29 @@ class GRURiskTrainer:
         model_meta: TemporalModelMeta | None = None,
     ) -> tuple[dict[str, float], dict]:
         torch = self._torch
-        meta = model_meta or TemporalModelMeta(
-            input_size=int(x_train.shape[-1]),
-            sequence_len=int(x_train.shape[1]),
-        )
+        if model_meta is None:
+            meta = TemporalModelMeta(
+                input_size=int(x_train.shape[-1]),
+                sequence_len=int(x_train.shape[1]),
+                model_type=self.cfg.model_type,
+            )
+        else:
+            if model_meta.model_type:
+                meta = model_meta
+            else:
+                meta = TemporalModelMeta(
+                    input_size=model_meta.input_size,
+                    hidden_size=model_meta.hidden_size,
+                    num_layers=model_meta.num_layers,
+                    sequence_len=model_meta.sequence_len,
+                    model_type=self.cfg.model_type,
+                    attention_heads=model_meta.attention_heads,
+                    ff_mult=model_meta.ff_mult,
+                )
+
         x_train, x_val, feature_mean, feature_std = self._normalize(x_train, x_val if x_val.size > 0 else x_train[:1])
 
-        wrapper = GRURiskNet(
-            torch_module=torch,
-            input_size=meta.input_size,
-            hidden_size=meta.hidden_size,
-            num_layers=meta.num_layers,
-        )
-        model = wrapper.model.to(self.cfg.device)
+        model = _build_model(torch, meta).to(self.cfg.device)
         criterion = torch.nn.BCELoss()
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.cfg.learning_rate, weight_decay=self.cfg.weight_decay)
 
@@ -156,6 +185,9 @@ class GRURiskTrainer:
             "hidden_size": meta.hidden_size,
             "num_layers": meta.num_layers,
             "sequence_len": meta.sequence_len,
+            "model_type": meta.model_type,
+            "attention_heads": meta.attention_heads,
+            "ff_mult": meta.ff_mult,
             "feature_mean": feature_mean.tolist(),
             "feature_std": feature_std.tolist(),
         }
@@ -167,3 +199,9 @@ class GRURiskTrainer:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._torch.save(artifact, path)
 
+
+class GRURiskTrainer(TemporalRiskTrainer):
+    def __init__(self, cfg: TrainerConfig) -> None:
+        if cfg.model_type != "gru":
+            cfg.model_type = "gru"
+        super().__init__(cfg)

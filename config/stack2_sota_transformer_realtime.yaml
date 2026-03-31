@@ -3,7 +3,7 @@ logging:
 
 pipeline:
   device: auto
-  fps: 20
+  fps: 24
   buffer_size: 4
   max_frames: null
   metrics_interval_sec: 2
@@ -17,7 +17,7 @@ ingestion:
   webcam_height: 540
 
 streams:
-  - stream_id: stack2_trained
+  - stream_id: stack2_sota_rt
     type: webcam
     source: 0
 
@@ -43,8 +43,8 @@ features:
 rules:
   bed_edge_distance_px: 40.0
   sitting_edge_seconds: 5.0
-  sudden_drop_vy: 260.0
-  sudden_drop_ay: 1300.0
+  sudden_drop_vy: 280.0
+  sudden_drop_ay: 1400.0
   lean_angle_deg: 30.0
   lean_std_deg: 8.0
   inactivity_speed_px_s: 7.0
@@ -58,23 +58,23 @@ rules:
   enable_transition_rule: true
 
 temporal_model:
-  backend: torch_gru
-  model_path: models/temporal_gru.pt
-  infer_interval: 1
-  min_infer_steps: 3
+  backend: torch_transformer_lite
+  model_path: models/temporal_transformer_lite.pt
+  infer_interval: 2
+  min_infer_steps: 4
 
 risk:
-  ml_weight: 0.45
+  ml_weight: 0.35
   medium_threshold: 0.6
   high_threshold: 0.85
   critical_threshold: 0.97
   allow_ml_level_override: false
   ema_alpha: 0.2
-  downgrade_grace_sec: 4.0
+  downgrade_grace_sec: 2.0
 
 output:
-  json_log_path: output/alerts_stack2_trained.jsonl
-  training_log_path: output/train_features_stack2_trained.jsonl
+  json_log_path: output/alerts_stack2_sota_rt.jsonl
+  training_log_path: output/train_features_stack2_sota_rt.jsonl
   enable_rest_api: true
   rest_api_host: 0.0.0.0
   rest_api_port: 8000
@@ -93,3 +93,4 @@ output:
     window_scale: 1.0
     quit_key: q
     quit_keys: [q, esc]
+

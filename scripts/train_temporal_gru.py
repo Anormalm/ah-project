@@ -12,13 +12,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from temporal.temporal_model import TemporalModelMeta
-from temporal.trainer import GRURiskTrainer, TrainerConfig
+from temporal.trainer import TemporalRiskTrainer, TrainerConfig
 from temporal.training_data import load_frame_log_dataset, load_sequence_dataset, split_dataset
 from utils.logger import setup_logger
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train temporal GRU risk model from JSONL dataset")
+    parser = argparse.ArgumentParser(description="Train temporal risk model (GRU or transformer-lite) from JSONL dataset")
     parser.add_argument("--input", required=True, help="Input JSONL path")
     parser.add_argument("--format", choices=["frame", "sequence"], default="frame", help="Dataset format")
     parser.add_argument("--output", default="models/temporal_gru.pt", help="Output model file")
@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.5, help="Decision threshold")
     parser.add_argument("--device", default="cpu", help="cpu | cuda")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--model-type", default="gru", choices=["gru", "transformer_lite"], help="Temporal model family")
+    parser.add_argument("--hidden-size", type=int, default=32, help="Hidden dimension")
+    parser.add_argument("--num-layers", type=int, default=1, help="GRU or encoder layers")
+    parser.add_argument("--attention-heads", type=int, default=2, help="Transformer attention heads")
+    parser.add_argument("--ff-mult", type=int, default=2, help="Transformer feed-forward multiplier")
     parser.add_argument("--min-positive-level", default="HIGH", choices=["MEDIUM", "HIGH", "CRITICAL"], help="Positive cutoff for frame logs")
     return parser.parse_args()
 
@@ -68,10 +73,19 @@ def main() -> None:
         decision_threshold=args.threshold,
         device=args.device,
         seed=args.seed,
+        model_type=args.model_type,
     )
 
-    trainer = GRURiskTrainer(cfg)
-    meta = TemporalModelMeta(sequence_len=args.sequence_len, input_size=int(x.shape[-1]))
+    trainer = TemporalRiskTrainer(cfg)
+    meta = TemporalModelMeta(
+        sequence_len=args.sequence_len,
+        input_size=int(x.shape[-1]),
+        hidden_size=int(args.hidden_size),
+        num_layers=int(args.num_layers),
+        model_type=args.model_type,
+        attention_heads=int(args.attention_heads),
+        ff_mult=int(args.ff_mult),
+    )
     metrics, artifact = trainer.train(
         x_train=x_train,
         y_train=y_train,
@@ -89,6 +103,7 @@ def main() -> None:
         "samples_train": int(x_train.shape[0]),
         "samples_val": int(x_val.shape[0]),
         "sequence_len": args.sequence_len,
+        "model_type": args.model_type,
         "metrics": metrics,
     }
     metrics_path = Path(args.metrics_out)

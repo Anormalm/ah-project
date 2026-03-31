@@ -67,7 +67,13 @@ python run.py --config config/stack2_ultralytics_twostage_balanced.yaml
 python run.py --config config/stack3_rtmo_mmpose_ward6.yaml
 ```
 
-For stacks A/B/C, open:
+### 4) Stack D - SOTA Temporal (Transformer Lite, low-latency)
+
+```powershell
+python run.py --config config/stack2_sota_transformer_realtime.yaml
+```
+
+For stacks A/B/C/D, open:
 - `http://127.0.0.1:8000/dashboard`
 - Includes live camera stream panel with pose overlays + live alert feed.
 
@@ -159,7 +165,7 @@ Sample event payload:
 }
 ```
 
-## Train The Temporal GRU (PowerShell)
+## Train Temporal Model (GRU or Transformer Lite)
 
 1) Collect feature logs while running Stack B:
 
@@ -167,25 +173,47 @@ Sample event payload:
 python run.py --config config/stack2_ultralytics_twostage_balanced.yaml
 ```
 
-2) Train GRU from collected logs:
+2) Train a low-latency Transformer Lite model from collected logs:
 
 ```powershell
 python scripts/train_temporal_gru.py `
   --input output/train_features_stack2.jsonl `
   --format frame `
+  --model-type transformer_lite `
+  --hidden-size 32 `
+  --num-layers 1 `
+  --attention-heads 2 `
+  --ff-mult 2 `
   --sequence-len 16 `
   --epochs 25 `
   --batch-size 64 `
   --device cpu `
-  --output models/temporal_gru.pt `
+  --output models/temporal_transformer_lite.pt `
   --metrics-out output/temporal_train_metrics.json
 ```
 
-3) Run with trained temporal model:
+3) Run with trained transformer temporal model:
 
 ```powershell
+python run.py --config config/stack2_sota_transformer_realtime.yaml
+```
+
+Optional: train a GRU baseline instead:
+
+```powershell
+python scripts/train_temporal_gru.py `
+  --input output/train_features_stack2.jsonl `
+  --format frame `
+  --model-type gru `
+  --output models/temporal_gru.pt `
+  --metrics-out output/temporal_train_metrics_gru.json
+
 python run.py --config config/stack2_ultralytics_twostage_trained.yaml
 ```
+
+Latency note:
+- `temporal_model.infer_interval` controls how often temporal inference runs per track.
+- Example: `infer_interval: 2` computes temporal ML every second frame and reuses cached probability in between to protect FPS.
 
 ## Run Tests
 

@@ -7,8 +7,9 @@ import numpy as np
 from detection.yolo_detector import MockDetectionEngine, YOLOPersonDetector
 from pose.pose_estimator import MockPoseEngine, PoseEstimator
 from risk.risk_scoring import RiskScorer
+from temporal.temporal_model import TemporalRiskModel
 from tracking.tracker import ByteTrackLikeTracker
-from utils.schemas import Detection, RuleDecision
+from utils.schemas import Detection, FeatureVector, RuleDecision
 
 
 def test_detection_output_format() -> None:
@@ -95,4 +96,39 @@ def test_risk_downgrades_after_grace_window() -> None:
     assert e1.risk_level == "HIGH"
     assert e2.risk_level == "HIGH"
     assert e3.risk_level == "LOW"
+
+
+def test_temporal_infer_interval_cache() -> None:
+    class _CountingBackend:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, inputs):
+            _ = inputs
+            self.calls += 1
+            return 0.42
+
+    def _fv(ts: float) -> FeatureVector:
+        return FeatureVector(
+            track_id=10,
+            timestamp=ts,
+            center_of_mass=(100.0, 100.0),
+            velocity=(1.0, 1.0),
+            acceleration=(0.1, 0.1),
+            joint_angles={"knee_l": 30.0},
+            posture="standing",
+            bed_zone_distance=50.0,
+            lean_angle=5.0,
+        )
+
+    backend = _CountingBackend()
+    model = TemporalRiskModel(backend=backend, sequence_len=8, infer_interval=3, min_infer_steps=2)
+    seq = [_fv(float(i)) for i in range(8)]
+
+    p1 = model.predict(seq, track_id=10)
+    p2 = model.predict(seq, track_id=10)
+    p3 = model.predict(seq, track_id=10)
+
+    assert p1 == p2 == p3
+    assert backend.calls == 2
 

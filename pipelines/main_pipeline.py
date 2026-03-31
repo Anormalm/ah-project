@@ -19,7 +19,13 @@ from output.visualizer import VisualizationConfig, Visualizer
 from pose.pose_estimator import MockPoseEngine, MoveNetTorchEngine, PoseEstimator, RTMOMMPoseEngine, UltralyticsPoseEngine
 from risk.risk_scoring import RiskScorer
 from temporal.rule_engine import RuleEngine
-from temporal.temporal_model import HeuristicTemporalEngine, NullTemporalEngine, TemporalRiskModel, TorchGRUInferenceEngine
+from temporal.temporal_model import (
+    HeuristicTemporalEngine,
+    NullTemporalEngine,
+    TemporalRiskModel,
+    TorchGRUInferenceEngine,
+    TorchTransformerLiteInferenceEngine,
+)
 from tracking.tracker import ByteTrackLikeTracker
 from utils.logger import setup_logger
 from utils.performance import FPSMonitor, PerformanceTracker
@@ -190,11 +196,21 @@ class RiskDetectionPipeline:
                 model_path=tm_cfg["model_path"],
                 device=self.device,
             )
+        elif backend_type in {"torch_transformer_lite", "torch_transformer"}:
+            backend = TorchTransformerLiteInferenceEngine(
+                model_path=tm_cfg["model_path"],
+                device=self.device,
+            )
         elif backend_type == "none":
             backend = NullTemporalEngine()
         else:
             backend = HeuristicTemporalEngine()
-        return TemporalRiskModel(backend=backend, sequence_len=self.pipeline_cfg.sequence_len)
+        return TemporalRiskModel(
+            backend=backend,
+            sequence_len=self.pipeline_cfg.sequence_len,
+            infer_interval=int(tm_cfg.get("infer_interval", 1)),
+            min_infer_steps=int(tm_cfg.get("min_infer_steps", 2)),
+        )
 
     def _detections_from_poses(self, poses) -> list[Detection]:
         det_cfg = self.cfg["detection"]
@@ -265,7 +281,10 @@ class RiskDetectionPipeline:
                     with self._perf.track("rules"):
                         rule_decision = self.rule_engine.evaluate(feature)
                     with self._perf.track("temporal_ml"):
-                        ml_prob = self.temporal_model.predict(list(self._seq[track.track_id]))
+                        ml_prob = self.temporal_model.predict(
+                            list(self._seq[track.track_id]),
+                            track_id=track.track_id,
+                        )
                     with self._perf.track("risk"):
                         event = self.risk_scorer.score(rule_decision, ml_prob)
                     with self._perf.track("output"):

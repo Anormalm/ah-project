@@ -58,8 +58,10 @@ rules:
   enable_transition_rule: true
 
 temporal_model:
-  backend: heuristic # torch_gru | heuristic | none
+  backend: heuristic # torch_gru | torch_transformer_lite | heuristic | none
   model_path: models/temporal_gru.pt
+  infer_interval: 1
+  min_infer_steps: 2
 
 risk:
   ml_weight: 0.35

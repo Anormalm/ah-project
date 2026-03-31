@@ -12,6 +12,9 @@ Pipeline flow:
 - In-memory processing only.
 - Alert outputs as structured JSON.
 - Optional live visualization with keypoints, IDs, and risk labels.
+- Prototype mode runs without bed zones by default.
+- Stabilized risk scoring with temporal smoothing/hysteresis to reduce alert flicker.
+- Clinician-facing event labels: `fall_detected`, `instability_risk`, `inactivity_risk`, `bed_exit_risk`, `stable`.
 
 ## Tech Stack
 
@@ -38,29 +41,70 @@ Pipeline flow:
 
 ```powershell
 cd "d:\AH Project"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip setuptools wheel
 python -m pip install -r requirements.txt
-python run.py --config config/config.yaml
 ```
 
-## Config Profiles
+## 3 Starter Stacks (Different Pipelines)
 
-### 1) Standard profile
+### 1) Stack A - Ultralytics one-stage pose (fast prototype)
+
+```powershell
+python run.py --config config/stack1_ultralytics_pose_fast.yaml
+```
+
+### 2) Stack B - Ultralytics two-stage (detector + pose, balanced)
+
+```powershell
+python run.py --config config/stack2_ultralytics_twostage_balanced.yaml
+```
+
+### 3) Stack C - RTMO (SOTA track for ward-scale multi-person)
+
+```powershell
+python run.py --config config/stack3_rtmo_mmpose_ward6.yaml
+```
+
+For stacks A/B/C, open:
+- `http://127.0.0.1:8000/dashboard`
+- Includes live camera stream panel with pose overlays + live alert feed.
+
+## Additional Profiles
+
+### Standard baseline
 
 ```powershell
 python run.py --config config/config.yaml
 ```
 
-### 2) Fall-only (target 30 FPS)
+### Fall-only (target 30 FPS)
 
 ```powershell
 python run.py --config config/fall_only_30fps.yaml
 ```
 
-### 3) Fast fall-only (optimized throughput)
+### Fast fall-only (optimized throughput)
 
 ```powershell
 python run.py --config config/fall_only_fast.yaml
 ```
+
+### Showcase clinical profile
+
+```powershell
+python run.py --config config/showcase_clinical.yaml
+```
+
+### Ward-6 RTMO profile
+
+```powershell
+python run.py --config config/ward6_rtmo_showcase.yaml
+```
+
+This profile uses one-stage multi-person pose (`RTMO`) and disables separate detection for better scaling when up to ~6 patients share one camera view.
+- Minimal professional UI optimized for nurse-station triage.
 
 ## Download Model Weights
 
@@ -69,6 +113,17 @@ python scripts/download_models.py
 ```
 
 Downloads common Ultralytics weights into `models/`.
+
+RTMO backend dependency install (one-time, for SOTA track):
+
+```powershell
+python -m pip install "numpy<2"
+python -m pip install mmengine mmcv-lite mmpose xtcocotools
+```
+
+Windows note:
+- Native Windows often fails for RTMO because `mmpose` may require `mmcv` ops (`mmcv._ext`) that are not reliably available without Linux/WSL builds.
+- If you hit `Failed to build mmcv` or `No module named mmcv._ext`, use Stack A/B on Windows and run RTMO in WSL2/Ubuntu.
 
 ## Exit / Stop Controls
 
@@ -86,6 +141,20 @@ Alerts are written to JSONL logs (path depends on config):
 - `output/alerts.jsonl`
 - `output/alerts_fall_only.jsonl`
 - `output/alerts_fall_fast.jsonl`
+- `output/alerts_showcase.jsonl`
+
+Sample event payload:
+
+```json
+{
+  "track_id": 2,
+  "risk_level": "HIGH",
+  "confidence": 0.84,
+  "event": "instability_risk",
+  "timestamp": 1774937600.12,
+  "reasons": ["lean_instability", "repeated_sit_stand_transitions"]
+}
+```
 
 ## Run Tests
 

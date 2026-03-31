@@ -20,12 +20,6 @@ streams:
   - stream_id: webcam0
     type: webcam
     source: 0
-  # - stream_id: ward_rtsp
-  #   type: rtsp
-  #   source: rtsp://user:pass@host:554/stream1
-  # - stream_id: clip_file
-  #   type: video
-  #   source: data/sample.mp4
 
 detection:
   backend: ultralytics # ultralytics | mock | none
@@ -45,19 +39,23 @@ tracking:
 
 features:
   min_keypoint_conf: 0.2
-  bed_zones:
-    - [80, 150, 280, 340]
-    - [360, 150, 560, 340]
 
 rules:
   bed_edge_distance_px: 40.0
   sitting_edge_seconds: 5.0
   sudden_drop_vy: 250.0
+  sudden_drop_ay: 1200.0
   lean_angle_deg: 30.0
   lean_std_deg: 8.0
-  enable_sitting_edge_rule: true
+  inactivity_speed_px_s: 8.0
+  inactivity_seconds: 20.0
+  transition_window_sec: 15.0
+  transition_threshold: 4
+  enable_sitting_edge_rule: false
   enable_fall_rule: true
   enable_lean_instability_rule: true
+  enable_inactivity_rule: true
+  enable_transition_rule: true
 
 temporal_model:
   backend: heuristic # torch_gru | heuristic | none
@@ -69,19 +67,24 @@ risk:
   high_threshold: 0.7
   critical_threshold: 0.9
   allow_ml_level_override: true
+  ema_alpha: 0.35
+  downgrade_grace_sec: 2.0
 
 output:
   json_log_path: output/alerts.jsonl
   enable_rest_api: false
   rest_api_host: 0.0.0.0
   rest_api_port: 8000
+  live_stream:
+    enabled: false
+    jpeg_quality: 80
   visualization:
     enabled: true
     show_bboxes: true
     show_pose: true
     show_tracks: true
     show_risk: true
-    show_bed_zones: true
+    show_bed_zones: false
     show_fps: true
     keypoint_conf_threshold: 0.2
     window_scale: 1.0

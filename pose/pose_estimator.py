@@ -134,6 +134,102 @@ class UltralyticsPoseEngine(InferenceEngine):
         return outputs
 
 
+class RTMOMMPoseEngine(InferenceEngine):
+    def __init__(self, model_alias: str = "rtmo-m", device: str = "cpu", bbox_thr: float = 0.2) -> None:
+        try:
+            from mmpose.apis import MMPoseInferencer
+        except ImportError as exc:
+            raise RuntimeError(
+                "mmpose is required for RTMO backend. Install with: "
+                "pip install -U openmim && mim install mmengine mmcv mmpose"
+            ) from exc
+
+        self._inferencer = MMPoseInferencer(pose2d=model_alias, device=device)
+        self.bbox_thr = bbox_thr
+
+    @staticmethod
+    def _to_kpts_xyc(keypoints: Any, scores: Any | None) -> np.ndarray:
+        k = np.array(keypoints, dtype=np.float32)
+        if k.ndim == 1:
+            k = k.reshape(-1, 2)
+        if k.ndim != 2:
+            return np.zeros((17, 3), dtype=np.float32)
+        if k.shape[1] >= 3:
+            return k[:, :3].astype(np.float32)
+        if scores is None:
+            conf = np.ones((k.shape[0], 1), dtype=np.float32)
+        else:
+            s = np.array(scores, dtype=np.float32).reshape(-1, 1)
+            if s.shape[0] != k.shape[0]:
+                s = np.ones((k.shape[0], 1), dtype=np.float32)
+            conf = s
+        return np.concatenate([k[:, :2], conf], axis=1).astype(np.float32)
+
+    @staticmethod
+    def _to_bbox(instance: dict[str, Any], kpts: np.ndarray) -> tuple[float, float, float, float]:
+        bbox = instance.get("bbox")
+        if bbox is not None:
+            b = np.array(bbox, dtype=np.float32).reshape(-1)
+            if b.size >= 4:
+                return float(b[0]), float(b[1]), float(b[2]), float(b[3])
+        valid = kpts[kpts[:, 2] > 0.05]
+        if valid.size == 0:
+            return (0.0, 0.0, 0.0, 0.0)
+        return (
+            float(valid[:, 0].min()),
+            float(valid[:, 1].min()),
+            float(valid[:, 0].max()),
+            float(valid[:, 1].max()),
+        )
+
+    def _infer(self, frame: np.ndarray) -> list[tuple[tuple[float, float, float, float], np.ndarray, float]]:
+        out = next(self._inferencer(frame, return_vis=False, draw_bbox=False, show=False))
+        predictions = out.get("predictions", [])
+        if predictions and isinstance(predictions[0], list):
+            instances = predictions[0]
+        else:
+            instances = predictions if isinstance(predictions, list) else []
+
+        parsed: list[tuple[tuple[float, float, float, float], np.ndarray, float]] = []
+        for inst in instances:
+            if not isinstance(inst, dict):
+                continue
+            kpts = self._to_kpts_xyc(inst.get("keypoints", []), inst.get("keypoint_scores"))
+            bbox = self._to_bbox(inst, kpts)
+            bbox_score = float(inst.get("bbox_score", np.mean(kpts[:, 2]) if kpts.size else 0.0))
+            if bbox_score < self.bbox_thr:
+                continue
+            parsed.append((bbox, kpts, bbox_score))
+        return parsed
+
+    def predict_full(self, frame: np.ndarray) -> list[tuple[tuple[float, float, float, float], np.ndarray, float]]:
+        return self._infer(frame)
+
+    def predict(self, inputs: tuple[np.ndarray, list[tuple[float, float, float, float]]]) -> list[np.ndarray]:
+        frame, bboxes = inputs
+        if not bboxes:
+            return []
+        full = self._infer(frame)
+        if not full:
+            return [np.zeros((17, 3), dtype=np.float32) for _ in bboxes]
+
+        outputs: list[np.ndarray] = []
+        full_boxes = [f[0] for f in full]
+        for target in bboxes:
+            best_idx = -1
+            best_iou = 0.0
+            for i, box in enumerate(full_boxes):
+                iou = _bbox_iou(target, box)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_idx = i
+            if best_idx >= 0 and best_iou >= 0.05:
+                outputs.append(full[best_idx][1])
+            else:
+                outputs.append(np.zeros((17, 3), dtype=np.float32))
+        return outputs
+
+
 class MoveNetTorchEngine(InferenceEngine):
     def __init__(self, model_path: str, device: str = "cpu", input_size: int = 256) -> None:
         try:

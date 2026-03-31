@@ -92,7 +92,7 @@ class Visualizer:
         tracks: list[TrackPose],
         risk_events: dict[int, RiskEvent],
         fps: float,
-        bed_zones: list[tuple[float, float, float, float]],
+        bed_zones: list[tuple[float, float, float, float]] | None = None,
     ) -> bool:
         if not self.cfg.enabled or not self._display_available:
             return True
@@ -100,7 +100,7 @@ class Visualizer:
         canvas = frame
 
         if self.cfg.show_bed_zones:
-            for i, zone in enumerate(bed_zones):
+            for i, zone in enumerate(bed_zones or []):
                 x1, y1, x2, y2 = [int(v) for v in zone]
                 cv2.rectangle(canvas, (x1, y1), (x2, y2), (180, 180, 60), 2)
                 cv2.putText(canvas, f"BedZone{i}", (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 60), 1)

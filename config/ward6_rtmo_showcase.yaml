@@ -2,78 +2,83 @@
   level: INFO
 
 pipeline:
-  device: cpu
-  fps: 30
+  device: auto
+  fps: 20
   buffer_size: 6
   max_frames: null
-  metrics_interval_sec: 3
-  sequence_len: 8
+  metrics_interval_sec: 2
+  sequence_len: 20
 
 ingestion:
   rtsp_reconnect_sec: 2.0
   rtsp_max_retries: 5
+  webcam_requested_fps: 30
+  webcam_width: 1280
+  webcam_height: 720
 
 streams:
-  - stream_id: webcam_fall_only
+  - stream_id: ward6_cam_a
     type: webcam
     source: 0
 
 detection:
-  backend: ultralytics
+  backend: none
   model_path: models/yolo11n.pt
-  conf_threshold: 0.45
+  conf_threshold: 0.2
   person_class_id: 0
 
 pose:
-  backend: ultralytics_pose
-  model_path: models/yolo11n-pose.pt
+  backend: rtmo_mmpose # rtmo_mmpose | ultralytics_pose | movenet_torch | mock
+  model_alias: rtmo-m
+  bbox_thr: 0.2
   input_size: 256
   match_iou_threshold: 0.1
+  model_path: models/yolo11n-pose.pt
 
 tracking:
-  iou_threshold: 0.3
-  max_misses: 20
+  iou_threshold: 0.25
+  max_misses: 25
 
 features:
-  min_keypoint_conf: 0.2
+  min_keypoint_conf: 0.25
 
 rules:
   bed_edge_distance_px: 40.0
   sitting_edge_seconds: 5.0
-  sudden_drop_vy: 200.0
+  sudden_drop_vy: 220.0
   sudden_drop_ay: 1000.0
-  lean_angle_deg: 30.0
-  lean_std_deg: 8.0
-  inactivity_speed_px_s: 8.0
-  inactivity_seconds: 20.0
+  lean_angle_deg: 28.0
+  lean_std_deg: 7.0
+  inactivity_speed_px_s: 7.0
+  inactivity_seconds: 16.0
   transition_window_sec: 15.0
   transition_threshold: 4
   enable_sitting_edge_rule: false
   enable_fall_rule: true
-  enable_lean_instability_rule: false
-  enable_inactivity_rule: false
-  enable_transition_rule: false
+  enable_lean_instability_rule: true
+  enable_inactivity_rule: true
+  enable_transition_rule: true
 
 temporal_model:
-  backend: none
+  backend: heuristic
   model_path: models/temporal_gru.pt
 
 risk:
-  ml_weight: 0.0
+  ml_weight: 0.35
   medium_threshold: 0.45
   high_threshold: 0.7
   critical_threshold: 0.9
-  allow_ml_level_override: false
-  ema_alpha: 0.25
-  downgrade_grace_sec: 1.0
+  allow_ml_level_override: true
+  ema_alpha: 0.30
+  downgrade_grace_sec: 2.5
 
 output:
-  json_log_path: output/alerts_fall_only.jsonl
-  enable_rest_api: false
+  json_log_path: output/alerts_ward6_rtmo.jsonl
+  enable_rest_api: true
   rest_api_host: 0.0.0.0
   rest_api_port: 8000
   live_stream:
-    enabled: false
+    enabled: true
     jpeg_quality: 80
   visualization:
     enabled: true
@@ -83,7 +88,7 @@ output:
     show_risk: true
     show_bed_zones: false
     show_fps: true
-    keypoint_conf_threshold: 0.2
+    keypoint_conf_threshold: 0.25
     window_scale: 1.0
     quit_key: q
     quit_keys: [q, esc]

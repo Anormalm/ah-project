@@ -15,7 +15,7 @@ from ingestion.rtsp_stream import create_rtsp_source
 from ingestion.video_loader import create_video_source
 from output.alert_manager import AlertManager
 from output.visualizer import VisualizationConfig, Visualizer
-from pose.pose_estimator import MockPoseEngine, MoveNetTorchEngine, PoseEstimator, UltralyticsPoseEngine
+from pose.pose_estimator import MockPoseEngine, MoveNetTorchEngine, PoseEstimator, RTMOMMPoseEngine, UltralyticsPoseEngine
 from risk.risk_scoring import RiskScorer
 from temporal.rule_engine import RuleEngine
 from temporal.temporal_model import HeuristicTemporalEngine, NullTemporalEngine, TemporalRiskModel, TorchGRUInferenceEngine
@@ -41,7 +41,7 @@ class PipelineConfig(BaseModel):
 
 
 class RiskDetectionPipeline:
-    def __init__(self, stream: StreamConfig, cfg: dict[str, Any]) -> None:
+    def __init__(self, stream: StreamConfig, cfg: dict[str, Any], alert_manager: AlertManager | None = None) -> None:
         self.stream = stream
         self.cfg = cfg
         self.logger = setup_logger(name=f"pipeline.{stream.stream_id}", level=cfg["logging"]["level"])
@@ -56,7 +56,7 @@ class RiskDetectionPipeline:
             max_misses=cfg["tracking"]["max_misses"],
         )
 
-        bed_zones = [tuple(zone) for zone in cfg["features"]["bed_zones"]]
+        bed_zones = [tuple(zone) for zone in cfg["features"].get("bed_zones", [])]
         self._bed_zones = bed_zones
         self.feature_extractor = FeatureExtractor(
             bed_zones=bed_zones,
@@ -68,13 +68,22 @@ class RiskDetectionPipeline:
         self.risk_scorer = RiskScorer(**cfg["risk"])
 
         alert_cfg = cfg["output"]
-        self.alert_manager = AlertManager(
-            json_log_path=alert_cfg["json_log_path"],
-            enable_api=alert_cfg["enable_rest_api"],
-            api_host=alert_cfg["rest_api_host"],
-            api_port=alert_cfg["rest_api_port"],
-            logger_name=f"alerts.{stream.stream_id}",
-        )
+        live_stream_cfg = alert_cfg.get("live_stream", {})
+        self._live_stream_enabled = bool(live_stream_cfg.get("enabled", False))
+        if alert_manager is None:
+            self.alert_manager = AlertManager(
+                json_log_path=alert_cfg["json_log_path"],
+                enable_api=alert_cfg["enable_rest_api"],
+                api_host=alert_cfg["rest_api_host"],
+                api_port=alert_cfg["rest_api_port"],
+                frame_jpeg_quality=int(live_stream_cfg.get("jpeg_quality", 80)),
+                logger_name=f"alerts.{stream.stream_id}",
+            )
+            self._owns_alert_manager = True
+        else:
+            self.alert_manager = alert_manager
+            self._owns_alert_manager = False
+        self.alert_manager.register_stream(stream.stream_id)
         vis_cfg = VisualizationConfig(**alert_cfg.get("visualization", {}))
         self.visualizer = Visualizer(stream_id=stream.stream_id, cfg=vis_cfg)
 
@@ -161,6 +170,12 @@ class RiskDetectionPipeline:
                 min_match_iou=pose_cfg.get("match_iou_threshold", 0.1),
                 input_size=pose_cfg.get("input_size", 256),
             )
+        elif backend_type in {"rtmo", "rtmo_mmpose"}:
+            backend = RTMOMMPoseEngine(
+                model_alias=pose_cfg.get("model_alias", "rtmo-m"),
+                device=self.device,
+                bbox_thr=pose_cfg.get("bbox_thr", 0.2),
+            )
         else:
             backend = MockPoseEngine()
         return PoseEstimator(backend=backend)
@@ -203,7 +218,8 @@ class RiskDetectionPipeline:
 
     def run(self) -> None:
         self.source.start()
-        self.alert_manager.start()
+        if self._owns_alert_manager:
+            self.alert_manager.start()
         self.logger.info("stream=%s started device=%s", self.stream.stream_id, self.device)
 
         frame_count = 0
@@ -265,6 +281,9 @@ class RiskDetectionPipeline:
                         fps=fps,
                         bed_zones=self._bed_zones,
                     )
+                if self._live_stream_enabled:
+                    with self._perf.track("ui_stream"):
+                        self.alert_manager.publish_frame(self.stream.stream_id, frame)
                 packet.frame = None
                 del frame
                 del detections
@@ -296,7 +315,17 @@ class RiskDetectionPipeline:
 class MultiStreamRunner:
     def __init__(self, cfg: dict[str, Any]) -> None:
         stream_cfgs = [StreamConfig(**item) for item in cfg["streams"]]
-        self.pipelines = [RiskDetectionPipeline(stream=s, cfg=cfg) for s in stream_cfgs]
+        output_cfg = cfg["output"]
+        live_stream_cfg = output_cfg.get("live_stream", {})
+        self.alert_manager = AlertManager(
+            json_log_path=output_cfg["json_log_path"],
+            enable_api=output_cfg["enable_rest_api"],
+            api_host=output_cfg["rest_api_host"],
+            api_port=output_cfg["rest_api_port"],
+            frame_jpeg_quality=int(live_stream_cfg.get("jpeg_quality", 80)),
+            logger_name="alerts",
+        )
+        self.pipelines = [RiskDetectionPipeline(stream=s, cfg=cfg, alert_manager=self.alert_manager) for s in stream_cfgs]
 
     def stop(self) -> None:
         for p in self.pipelines:
@@ -305,6 +334,7 @@ class MultiStreamRunner:
     def run(self) -> None:
         if not self.pipelines:
             return
+        self.alert_manager.start()
 
         def _sig_handler(signum, frame):
             _ = (signum, frame)

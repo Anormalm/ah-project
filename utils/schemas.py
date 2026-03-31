@@ -34,6 +34,7 @@ class FeatureVector(BaseModel):
     timestamp: float
     center_of_mass: tuple[float, float]
     velocity: tuple[float, float]
+    acceleration: tuple[float, float]
     joint_angles: dict[str, float]
     posture: Literal["lying", "sitting", "standing", "unknown"]
     bed_zone_distance: float
@@ -55,6 +56,7 @@ class RiskEvent(BaseModel):
     risk_level: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
     confidence: float = Field(ge=0.0, le=1.0)
     timestamp: float
+    event: Literal["stable", "inactivity_risk", "instability_risk", "bed_exit_risk", "fall_detected"] = "stable"
     reasons: list[str] = Field(default_factory=list)
 
 

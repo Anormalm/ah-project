@@ -1,38 +1,41 @@
-﻿logging:
+logging:
   level: INFO
 
 pipeline:
-  device: cpu
+  device: auto
   fps: 30
-  buffer_size: 6
+  buffer_size: 4
   max_frames: null
-  metrics_interval_sec: 3
-  sequence_len: 8
+  metrics_interval_sec: 2
+  sequence_len: 10
 
 ingestion:
   rtsp_reconnect_sec: 2.0
   rtsp_max_retries: 5
+  webcam_requested_fps: 30
+  webcam_width: 640
+  webcam_height: 360
 
 streams:
-  - stream_id: webcam_fall_only
+  - stream_id: stack1_fast
     type: webcam
     source: 0
 
 detection:
-  backend: ultralytics
+  backend: none
   model_path: models/yolo11n.pt
-  conf_threshold: 0.45
+  conf_threshold: 0.30
   person_class_id: 0
 
 pose:
   backend: ultralytics_pose
   model_path: models/yolo11n-pose.pt
-  input_size: 256
+  input_size: 224
   match_iou_threshold: 0.1
 
 tracking:
   iou_threshold: 0.3
-  max_misses: 20
+  max_misses: 12
 
 features:
   min_keypoint_conf: 0.2
@@ -40,8 +43,8 @@ features:
 rules:
   bed_edge_distance_px: 40.0
   sitting_edge_seconds: 5.0
-  sudden_drop_vy: 200.0
-  sudden_drop_ay: 1000.0
+  sudden_drop_vy: 180.0
+  sudden_drop_ay: 900.0
   lean_angle_deg: 30.0
   lean_std_deg: 8.0
   inactivity_speed_px_s: 8.0
@@ -68,13 +71,13 @@ risk:
   downgrade_grace_sec: 1.0
 
 output:
-  json_log_path: output/alerts_fall_only.jsonl
-  enable_rest_api: false
+  json_log_path: output/alerts_stack1_fast.jsonl
+  enable_rest_api: true
   rest_api_host: 0.0.0.0
   rest_api_port: 8000
   live_stream:
-    enabled: false
-    jpeg_quality: 80
+    enabled: true
+    jpeg_quality: 75
   visualization:
     enabled: true
     show_bboxes: true

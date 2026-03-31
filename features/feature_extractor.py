@@ -20,12 +20,13 @@ def _angle(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
 @dataclass
 class _PrevState:
     center: tuple[float, float]
+    velocity: tuple[float, float]
     timestamp: float
 
 
 class FeatureExtractor:
-    def __init__(self, bed_zones: list[tuple[float, float, float, float]], min_kpt_conf: float = 0.2) -> None:
-        self.bed_zones = bed_zones
+    def __init__(self, bed_zones: list[tuple[float, float, float, float]] | None = None, min_kpt_conf: float = 0.2) -> None:
+        self.bed_zones = bed_zones or []
         self.min_kpt_conf = min_kpt_conf
         self._prev: dict[int, _PrevState] = {}
 
@@ -80,22 +81,24 @@ class FeatureExtractor:
         lean_angle = 0.0 if denom <= 1e-6 else float(np.degrees(np.arccos(np.clip(np.dot(torso, vertical) / denom, -1.0, 1.0))))
         return angles, lean_angle
 
-    def _velocity(self, track_id: int, center: tuple[float, float], timestamp: float) -> tuple[float, float]:
+    def _kinematics(self, track_id: int, center: tuple[float, float], timestamp: float) -> tuple[tuple[float, float], tuple[float, float]]:
         prev = self._prev.get(track_id)
         if prev is None:
-            self._prev[track_id] = _PrevState(center=center, timestamp=timestamp)
-            return (0.0, 0.0)
+            self._prev[track_id] = _PrevState(center=center, velocity=(0.0, 0.0), timestamp=timestamp)
+            return (0.0, 0.0), (0.0, 0.0)
 
         dt = max(timestamp - prev.timestamp, 1e-6)
         vx = (center[0] - prev.center[0]) / dt
         vy = (center[1] - prev.center[1]) / dt
-        self._prev[track_id] = _PrevState(center=center, timestamp=timestamp)
-        return (float(vx), float(vy))
+        ax = (vx - prev.velocity[0]) / dt
+        ay = (vy - prev.velocity[1]) / dt
+        self._prev[track_id] = _PrevState(center=center, velocity=(float(vx), float(vy)), timestamp=timestamp)
+        return (float(vx), float(vy)), (float(ax), float(ay))
 
     def extract(self, track_pose: TrackPose) -> FeatureVector:
         keypoints = np.array(track_pose.keypoints, dtype=np.float32)
         center = self._center_of_mass(keypoints)
-        velocity = self._velocity(track_pose.track_id, center, track_pose.timestamp)
+        velocity, acceleration = self._kinematics(track_pose.track_id, center, track_pose.timestamp)
         joint_angles, lean_angle = self._joint_angles(keypoints)
         posture = self._posture(keypoints, joint_angles)
 
@@ -109,6 +112,7 @@ class FeatureExtractor:
             timestamp=track_pose.timestamp,
             center_of_mass=center,
             velocity=velocity,
+            acceleration=acceleration,
             joint_angles=joint_angles,
             posture=posture,
             bed_zone_distance=float(bed_dist),

@@ -13,11 +13,12 @@ class HeuristicTemporalEngine(InferenceEngine):
         features = inputs
         if features.size == 0:
             return 0.0
+        speed = np.abs(features[:, 0]).mean()
         vy = np.abs(features[:, 1]).mean()
-        lean = features[:, 2].mean()
-        dist = features[:, 3].mean()
+        acc = np.abs(features[:, 2]).mean()
+        lean = features[:, 3].mean()
         posture = features[:, 4].mean()
-        raw = 0.0025 * vy + 0.02 * lean + 0.25 * posture + max(0.0, 0.2 - 0.0015 * dist)
+        raw = 0.0020 * speed + 0.0025 * vy + 0.0009 * acc + 0.018 * lean + 0.25 * posture
         prob = 1.0 / (1.0 + np.exp(-raw + 1.2))
         return float(np.clip(prob, 0.0, 1.0))
 
@@ -75,12 +76,14 @@ class TemporalRiskModel:
     def _to_features(self, sequence: Sequence[FeatureVector]) -> np.ndarray:
         rows = []
         for f in sequence[-self.sequence_len :]:
+            speed = float(np.hypot(f.velocity[0], f.velocity[1]))
+            acc = float(np.hypot(f.acceleration[0], f.acceleration[1]))
             rows.append(
                 [
-                    f.velocity[0],
+                    speed,
                     f.velocity[1],
+                    acc,
                     f.lean_angle,
-                    f.bed_zone_distance,
                     self._posture_to_scalar(f.posture),
                 ]
             )

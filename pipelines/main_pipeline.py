@@ -14,6 +14,7 @@ from features.feature_extractor import FeatureExtractor
 from ingestion.rtsp_stream import create_rtsp_source
 from ingestion.video_loader import create_video_source
 from output.alert_manager import AlertManager
+from output.training_data_logger import TrainingDataLogger
 from output.visualizer import VisualizationConfig, Visualizer
 from pose.pose_estimator import MockPoseEngine, MoveNetTorchEngine, PoseEstimator, RTMOMMPoseEngine, UltralyticsPoseEngine
 from risk.risk_scoring import RiskScorer
@@ -86,6 +87,7 @@ class RiskDetectionPipeline:
         self.alert_manager.register_stream(stream.stream_id)
         vis_cfg = VisualizationConfig(**alert_cfg.get("visualization", {}))
         self.visualizer = Visualizer(stream_id=stream.stream_id, cfg=vis_cfg)
+        self.training_logger = TrainingDataLogger(alert_cfg.get("training_log_path"))
 
         self._stop_event = threading.Event()
         self._perf = PerformanceTracker()
@@ -268,6 +270,7 @@ class RiskDetectionPipeline:
                         event = self.risk_scorer.score(rule_decision, ml_prob)
                     with self._perf.track("output"):
                         self.alert_manager.emit(self.stream.stream_id, event)
+                        self.training_logger.emit(self.stream.stream_id, feature, event)
                     risk_events[track.track_id] = event
 
                 frame_count += 1

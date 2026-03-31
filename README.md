@@ -71,6 +71,9 @@ For stacks A/B/C, open:
 - `http://127.0.0.1:8000/dashboard`
 - Includes live camera stream panel with pose overlays + live alert feed.
 
+Stack B also writes training-ready feature logs to:
+- `output/train_features_stack2.jsonl`
+
 ## Additional Profiles
 
 ### Standard baseline
@@ -154,6 +157,34 @@ Sample event payload:
   "timestamp": 1774937600.12,
   "reasons": ["lean_instability", "repeated_sit_stand_transitions"]
 }
+```
+
+## Train The Temporal GRU (PowerShell)
+
+1) Collect feature logs while running Stack B:
+
+```powershell
+python run.py --config config/stack2_ultralytics_twostage_balanced.yaml
+```
+
+2) Train GRU from collected logs:
+
+```powershell
+python scripts/train_temporal_gru.py `
+  --input output/train_features_stack2.jsonl `
+  --format frame `
+  --sequence-len 16 `
+  --epochs 25 `
+  --batch-size 64 `
+  --device cpu `
+  --output models/temporal_gru.pt `
+  --metrics-out output/temporal_train_metrics.json
+```
+
+3) Run with trained temporal model:
+
+```powershell
+python run.py --config config/stack2_ultralytics_twostage_trained.yaml
 ```
 
 ## Run Tests

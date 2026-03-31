@@ -1,34 +1,34 @@
-﻿logging:
+logging:
   level: INFO
 
 pipeline:
   device: auto
-  fps: 15
+  fps: 20
   buffer_size: 4
   max_frames: null
-  metrics_interval_sec: 3
+  metrics_interval_sec: 2
   sequence_len: 16
 
 ingestion:
   rtsp_reconnect_sec: 2.0
   rtsp_max_retries: 5
   webcam_requested_fps: 30
-  webcam_width: 640
-  webcam_height: 480
+  webcam_width: 960
+  webcam_height: 540
 
 streams:
-  - stream_id: webcam0
+  - stream_id: stack2_trained
     type: webcam
     source: 0
 
 detection:
-  backend: ultralytics # ultralytics | mock | none
+  backend: ultralytics
   model_path: models/yolo11n.pt
-  conf_threshold: 0.4
+  conf_threshold: 0.45
   person_class_id: 0
 
 pose:
-  backend: ultralytics_pose # ultralytics_pose | movenet_torch | mock
+  backend: ultralytics_pose
   model_path: models/yolo11n-pose.pt
   input_size: 256
   match_iou_threshold: 0.1
@@ -38,17 +38,17 @@ tracking:
   max_misses: 20
 
 features:
-  min_keypoint_conf: 0.2
+  min_keypoint_conf: 0.25
 
 rules:
   bed_edge_distance_px: 40.0
   sitting_edge_seconds: 5.0
-  sudden_drop_vy: 250.0
-  sudden_drop_ay: 1200.0
+  sudden_drop_vy: 260.0
+  sudden_drop_ay: 1300.0
   lean_angle_deg: 30.0
   lean_std_deg: 8.0
-  inactivity_speed_px_s: 8.0
-  inactivity_seconds: 20.0
+  inactivity_speed_px_s: 7.0
+  inactivity_seconds: 18.0
   transition_window_sec: 15.0
   transition_threshold: 4
   enable_sitting_edge_rule: false
@@ -58,26 +58,26 @@ rules:
   enable_transition_rule: true
 
 temporal_model:
-  backend: heuristic # torch_gru | heuristic | none
+  backend: torch_gru
   model_path: models/temporal_gru.pt
 
 risk:
-  ml_weight: 0.35
-  medium_threshold: 0.45
-  high_threshold: 0.7
-  critical_threshold: 0.9
-  allow_ml_level_override: true
-  ema_alpha: 0.35
-  downgrade_grace_sec: 2.0
+  ml_weight: 0.45
+  medium_threshold: 0.6
+  high_threshold: 0.85
+  critical_threshold: 0.97
+  allow_ml_level_override: false
+  ema_alpha: 0.2
+  downgrade_grace_sec: 4.0
 
 output:
-  json_log_path: output/alerts.jsonl
-  training_log_path: null
-  enable_rest_api: false
+  json_log_path: output/alerts_stack2_trained.jsonl
+  training_log_path: output/train_features_stack2_trained.jsonl
+  enable_rest_api: true
   rest_api_host: 0.0.0.0
   rest_api_port: 8000
   live_stream:
-    enabled: false
+    enabled: true
     jpeg_quality: 80
   visualization:
     enabled: true
@@ -87,7 +87,8 @@ output:
     show_risk: true
     show_bed_zones: false
     show_fps: true
-    keypoint_conf_threshold: 0.2
+    keypoint_conf_threshold: 0.25
     window_scale: 1.0
     quit_key: q
     quit_keys: [q, esc]
+

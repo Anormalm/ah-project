@@ -43,8 +43,9 @@ features:
 rules:
   bed_edge_distance_px: 40.0
   sitting_edge_seconds: 5.0
-  sudden_drop_vy: 220.0
-  sudden_drop_ay: 1000.0
+
+  sudden_drop_vy: 320.0
+  sudden_drop_ay: 1800.0
   lean_angle_deg: 30.0
   lean_std_deg: 8.0
   inactivity_speed_px_s: 7.0
@@ -62,16 +63,18 @@ temporal_model:
   model_path: models/temporal_gru.pt
 
 risk:
-  ml_weight: 0.35
-  medium_threshold: 0.45
-  high_threshold: 0.7
-  critical_threshold: 0.9
-  allow_ml_level_override: true
-  ema_alpha: 0.30
-  downgrade_grace_sec: 2.5
+  ml_weight: 0.15
+  medium_threshold: 0.60
+  high_threshold: 0.85
+  critical_threshold: 0.97
+  allow_ml_level_override: false
+  ema_alpha: 0.20
+  downgrade_grace_sec: 4.0
+
 
 output:
   json_log_path: output/alerts_stack2_balanced.jsonl
+  training_log_path: output/train_features_stack2.jsonl
   enable_rest_api: true
   rest_api_host: 0.0.0.0
   rest_api_port: 8000

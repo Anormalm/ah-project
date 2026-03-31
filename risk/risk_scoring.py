@@ -9,7 +9,7 @@ from utils.schemas import RiskEvent, RuleDecision
 class _RiskState:
     ema_score: float
     last_level: str
-    last_ts: float
+    last_level_change_ts: float
 
 
 class RiskScorer:
@@ -59,19 +59,29 @@ class RiskScorer:
     def _stabilize(self, track_id: int, raw_score: float, raw_level: str, ts: float) -> tuple[float, str]:
         prev = self._state.get(track_id)
         if prev is None:
-            self._state[track_id] = _RiskState(ema_score=raw_score, last_level=raw_level, last_ts=ts)
+            self._state[track_id] = _RiskState(
+                ema_score=raw_score,
+                last_level=raw_level,
+                last_level_change_ts=ts,
+            )
             return raw_score, raw_level
 
         ema = self.ema_alpha * raw_score + (1.0 - self.ema_alpha) * prev.ema_score
         ema_level = self._level_from_prob(ema, self.medium_threshold, self.high_threshold, self.critical_threshold)
 
         # Avoid rapid downgrades while allowing immediate escalation.
-        if self._rank[ema_level] < self._rank[prev.last_level] and (ts - prev.last_ts) < self.downgrade_grace_sec:
+        if self._rank[ema_level] < self._rank[prev.last_level] and (ts - prev.last_level_change_ts) < self.downgrade_grace_sec:
             stable_level = prev.last_level
+            level_change_ts = prev.last_level_change_ts
         else:
             stable_level = ema_level if self._rank[ema_level] >= self._rank[raw_level] else raw_level
+            level_change_ts = ts if stable_level != prev.last_level else prev.last_level_change_ts
 
-        self._state[track_id] = _RiskState(ema_score=ema, last_level=stable_level, last_ts=ts)
+        self._state[track_id] = _RiskState(
+            ema_score=ema,
+            last_level=stable_level,
+            last_level_change_ts=level_change_ts,
+        )
         return ema, stable_level
 
     def score(self, rule_decision: RuleDecision, ml_probability: float) -> RiskEvent:

@@ -74,3 +74,25 @@ def test_risk_scoring_logic() -> None:
     assert 0.0 <= event.confidence <= 1.0
     assert "lean_instability" in event.reasons
 
+
+def test_risk_downgrades_after_grace_window() -> None:
+    t0 = time.time()
+    scorer = RiskScorer(
+        ml_weight=0.0,
+        ema_alpha=1.0,
+        downgrade_grace_sec=1.0,
+        allow_ml_level_override=False,
+    )
+
+    high = RuleDecision(track_id=5, timestamp=t0, rule_score=0.85, rule_level="HIGH", reasons=["lean_instability"])
+    low_soon = RuleDecision(track_id=5, timestamp=t0 + 0.2, rule_score=0.1, rule_level="LOW", reasons=[])
+    low_later = RuleDecision(track_id=5, timestamp=t0 + 1.3, rule_score=0.1, rule_level="LOW", reasons=[])
+
+    e1 = scorer.score(high, ml_probability=0.0)
+    e2 = scorer.score(low_soon, ml_probability=0.0)
+    e3 = scorer.score(low_later, ml_probability=0.0)
+
+    assert e1.risk_level == "HIGH"
+    assert e2.risk_level == "HIGH"
+    assert e3.risk_level == "LOW"
+

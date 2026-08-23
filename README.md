@@ -324,3 +324,18 @@ scripts/soak_test_jetson.sh 3600 config/jetson_orin_nx_sota.yaml
 
 Application metrics include capture/drop/reconnect counts and recent p50/p95/p99
 module latency; the soak script records `tegrastats` alongside the application log.
+
+## Intel RealSense D435i preparation
+
+The optional `config/jetson_orin_nx_realsense_d435i.yaml` profile accepts aligned
+BGR and depth frames directly over USB while keeping the existing RGB pose path.
+Depth is captured now for calibration and later 3D feature work; risk decisions do
+not use it yet. Install librealsense/`pyrealsense2` for the target OS, connect the
+camera over USB 3, then verify that the device is visible before running:
+
+```bash
+python run.py --config config/jetson_orin_nx_realsense_d435i.yaml
+```
+
+For multiple connected cameras, replace `source: auto` with the D435i serial.
+Keep the camera IMU disabled for the initial fixed-mount deployment.

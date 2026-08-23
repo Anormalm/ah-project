@@ -14,6 +14,9 @@ import numpy as np
 class FramePacket:
     frame: Optional[np.ndarray]
     timestamp: float
+    # Populated by RGB-D sources. Existing RGB consumers intentionally ignore it.
+    depth_frame: Optional[np.ndarray] = None
+    depth_scale_m: float | None = None
 
 
 class AsyncVideoSource:
@@ -279,4 +282,3 @@ def create_video_source(
     if normalized == "gstreamer":
         return GStreamerSource(pipeline=str(source_path), target_fps=fps, buffer_size=buffer_size)
     raise ValueError(f"Unsupported video source type: {source_type}")
-

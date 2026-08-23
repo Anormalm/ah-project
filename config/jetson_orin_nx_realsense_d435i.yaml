@@ -1,0 +1,21 @@
+extends: jetson_orin_nx_sota.yaml
+
+# Direct USB RGB-D preparation profile. This bypasses the RTSP/NVDEC ingestion
+# path but retains the same TensorRT pose, tracking, rules and output stack.
+streams:
+  - stream_id: jetson_d435i
+    type: realsense
+    # Use "auto" for one camera, or replace with the device serial number.
+    source: auto
+
+ingestion:
+  realsense:
+    width: 640
+    height: 480
+    fps: 30
+    frame_timeout_ms: 1000
+    # Camera IMU is disabled initially; it measures camera motion, not patients.
+    enable_imu: false
+
+output:
+  json_log_path: output/alerts_jetson_d435i.jsonl

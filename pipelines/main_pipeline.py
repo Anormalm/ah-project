@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from detection.yolo_detector import MockDetectionEngine, UltralyticsYOLOEngine, YOLOPersonDetector
 from features.feature_extractor import FeatureExtractor
+from ingestion.realsense_source import create_realsense_source
 from ingestion.rtsp_stream import create_rtsp_source
 from ingestion.video_loader import create_video_source
 from models.inference_engine import InferenceEngine, SynchronizedInferenceEngine
@@ -37,7 +38,7 @@ from utils.schemas import Detection
 
 class StreamConfig(BaseModel):
     stream_id: str
-    type: str = Field(pattern="^(webcam|video|rtsp|gstreamer|dummy)$")
+    type: str = Field(pattern="^(webcam|video|rtsp|realsense|gstreamer|dummy)$")
     source: str | int
 
 
@@ -187,6 +188,12 @@ class RiskDetectionPipeline:
                 transport=str(ingestion_cfg.get("rtsp_transport", "tcp")),
                 runtime_reconnect=bool(ingestion_cfg.get("rtsp_runtime_reconnect", True)),
                 runtime_max_retries=ingestion_cfg.get("rtsp_runtime_max_retries"),
+            )
+        if self.stream.type == "realsense":
+            return create_realsense_source(
+                source=self.stream.source,
+                options=self.cfg["ingestion"].get("realsense", {}),
+                buffer_size=buffer_size,
             )
         webcam_options = {
             "requested_fps": self.cfg["ingestion"].get("webcam_requested_fps"),
@@ -566,4 +573,3 @@ class MultiStreamRunner:
         finally:
             self.stop()
             self.alert_manager.close()
-

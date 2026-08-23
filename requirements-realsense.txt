@@ -1,0 +1,4 @@
+# Install only on a machine where a compatible pyrealsense2 wheel is available.
+# On Jetson/aarch64, use the librealsense packages or build instructions matching
+# the installed JetPack/L4T release; do not replace JetPack's CUDA/OpenCV stack.
+pyrealsense2>=2.55,<3.0

@@ -43,12 +43,42 @@ def _expand_environment(value):
     return value
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_config_tree(cfg_path: Path, seen: set[Path] | None = None) -> dict:
+    seen = set() if seen is None else seen
+    resolved = cfg_path.resolve()
+    if resolved in seen:
+        chain = " -> ".join(str(item) for item in [*seen, resolved])
+        raise ValueError(f"Circular config inheritance: {chain}")
+    if not resolved.exists():
+        raise FileNotFoundError(f"Config not found: {resolved}")
+    seen.add(resolved)
+    with resolved.open("r", encoding="utf-8") as handle:
+        current = yaml.safe_load(handle) or {}
+    parent_ref = current.pop("extends", None)
+    if parent_ref is None:
+        seen.remove(resolved)
+        return current
+    parent_path = Path(parent_ref)
+    if not parent_path.is_absolute():
+        parent_path = resolved.parent / parent_path
+    parent = _load_config_tree(parent_path, seen)
+    seen.remove(resolved)
+    return _deep_merge(parent, current)
+
+
 def load_config(path: str) -> dict:
     cfg_path = Path(path).resolve()
-    if not cfg_path.exists():
-        raise FileNotFoundError(f"Config not found: {cfg_path}")
-    with cfg_path.open("r", encoding="utf-8") as f:
-        cfg = _expand_environment(yaml.safe_load(f))
+    cfg = _expand_environment(_load_config_tree(cfg_path))
     return _resolve_runtime_paths(cfg, cfg_path)
 
 

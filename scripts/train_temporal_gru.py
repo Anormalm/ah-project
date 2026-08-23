@@ -13,12 +13,12 @@ if str(ROOT) not in sys.path:
 
 from temporal.temporal_model import TemporalModelMeta
 from temporal.trainer import TemporalRiskTrainer, TrainerConfig
-from temporal.training_data import load_frame_log_dataset, load_sequence_dataset, split_dataset
+from temporal.training_data import load_frame_log_dataset, load_sequence_dataset, split_dataset, split_dataset_grouped
 from utils.logger import setup_logger
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train temporal risk model (GRU or transformer-lite) from JSONL dataset")
+    parser = argparse.ArgumentParser(description="Train temporal risk model (GRU, transformer-lite or ST-GCN) from JSONL")
     parser.add_argument("--input", required=True, help="Input JSONL path")
     parser.add_argument("--format", choices=["frame", "sequence"], default="frame", help="Dataset format")
     parser.add_argument("--output", default="models/temporal_gru.pt", help="Output model file")
@@ -33,11 +33,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.5, help="Decision threshold")
     parser.add_argument("--device", default="cpu", help="cpu | cuda")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--model-type", default="gru", choices=["gru", "transformer_lite"], help="Temporal model family")
+    parser.add_argument("--model-type", default="gru", choices=["gru", "transformer_lite", "stgcn"], help="Temporal model family")
     parser.add_argument("--hidden-size", type=int, default=32, help="Hidden dimension")
     parser.add_argument("--num-layers", type=int, default=1, help="GRU or encoder layers")
     parser.add_argument("--attention-heads", type=int, default=2, help="Transformer attention heads")
     parser.add_argument("--ff-mult", type=int, default=2, help="Transformer feed-forward multiplier")
+    parser.add_argument("--num-joints", type=int, default=17, help="Skeleton joints for ST-GCN")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Model dropout")
+    parser.add_argument("--focal-gamma", type=float, default=2.0, help="Focal loss gamma; 0 disables focusing")
+    parser.add_argument("--weak-label-weight", type=float, default=0.25, help="Weight assigned to rule-generated labels")
+    parser.add_argument("--allow-weak-only", action="store_true", help="Allow training without any human/curated labels")
     parser.add_argument("--min-positive-level", default="HIGH", choices=["MEDIUM", "HIGH", "CRITICAL"], help="Positive cutoff for frame logs")
     return parser.parse_args()
 
@@ -46,23 +51,39 @@ def main() -> None:
     args = parse_args()
     logger = setup_logger(name="train_temporal", level="INFO")
 
+    feature_mode = "skeleton" if args.model_type == "stgcn" else "biomechanics"
     if args.format == "sequence":
-        x, y, w = load_sequence_dataset(args.input, sequence_len=args.sequence_len)
+        x, y, w = load_sequence_dataset(
+            args.input,
+            sequence_len=args.sequence_len,
+            feature_mode=feature_mode,
+            num_joints=args.num_joints,
+        )
+        groups = None
     else:
-        x, y, w = load_frame_log_dataset(
+        x, y, w, groups = load_frame_log_dataset(
             args.input,
             sequence_len=args.sequence_len,
             min_positive_level=args.min_positive_level,
+            feature_mode=feature_mode,
+            num_joints=args.num_joints,
+            weak_label_weight=args.weak_label_weight,
+            return_groups=True,
         )
-    _ = w
+        if not args.allow_weak_only and not bool(np.any(w >= 0.999)):
+            raise SystemExit(
+                "No human/curated labels found. Annotate label_source as human/curated, "
+                "or pass --allow-weak-only for non-production experiments."
+            )
 
-    (x_train, y_train, _), (x_val, y_val, _) = split_dataset(
-        x,
-        y,
-        np.ones_like(y, dtype=float),
-        val_ratio=args.val_ratio,
-        seed=args.seed,
-    )
+    if groups is None:
+        (x_train, y_train, w_train), (x_val, y_val, w_val) = split_dataset(
+            x, y, w, val_ratio=args.val_ratio, seed=args.seed
+        )
+    else:
+        (x_train, y_train, w_train), (x_val, y_val, w_val) = split_dataset_grouped(
+            x, y, w, groups, val_ratio=args.val_ratio, seed=args.seed
+        )
 
     cfg = TrainerConfig(
         epochs=args.epochs,
@@ -74,6 +95,7 @@ def main() -> None:
         device=args.device,
         seed=args.seed,
         model_type=args.model_type,
+        focal_gamma=float(args.focal_gamma),
     )
 
     trainer = TemporalRiskTrainer(cfg)
@@ -85,6 +107,8 @@ def main() -> None:
         model_type=args.model_type,
         attention_heads=int(args.attention_heads),
         ff_mult=int(args.ff_mult),
+        num_joints=int(args.num_joints),
+        dropout=float(args.dropout),
     )
     metrics, artifact = trainer.train(
         x_train=x_train,
@@ -92,8 +116,12 @@ def main() -> None:
         x_val=x_val,
         y_val=y_val,
         model_meta=meta,
+        w_train=w_train,
+        w_val=w_val,
     )
     trainer.save(artifact, args.output)
+    if x_val.shape[0] == 0:
+        logger.warning("no held-out groups available; reported metrics are training metrics and not release evidence")
 
     payload = {
         "input_path": str(Path(args.input)),
@@ -104,6 +132,8 @@ def main() -> None:
         "samples_val": int(x_val.shape[0]),
         "sequence_len": args.sequence_len,
         "model_type": args.model_type,
+        "feature_mode": feature_mode,
+        "split_policy": "example_random" if groups is None else "subject_or_session_track_grouped",
         "metrics": metrics,
     }
     metrics_path = Path(args.metrics_out)

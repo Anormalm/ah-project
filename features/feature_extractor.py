@@ -89,6 +89,30 @@ class FeatureExtractor:
         lean_angle = 0.0 if denom <= 1e-6 else float(np.degrees(np.arccos(np.clip(np.dot(torso, vertical) / denom, -1.0, 1.0))))
         return angles, lean_angle
 
+    def _normalize_keypoints(self, keypoints: np.ndarray) -> list[tuple[float, float, float]]:
+        """Return translation/scale-invariant COCO skeleton coordinates."""
+        if keypoints.ndim != 2 or keypoints.shape[1] < 3:
+            return []
+        visible = keypoints[:, 2] >= self.min_kpt_conf
+        if not np.any(visible):
+            return [(0.0, 0.0, 0.0) for _ in range(keypoints.shape[0])]
+
+        if keypoints.shape[0] > 12 and visible[11] and visible[12]:
+            origin = (keypoints[11, :2] + keypoints[12, :2]) * 0.5
+        elif keypoints.shape[0] > 6 and visible[5] and visible[6]:
+            origin = (keypoints[5, :2] + keypoints[6, :2]) * 0.5
+        else:
+            origin = keypoints[visible, :2].mean(axis=0)
+
+        visible_xy = keypoints[visible, :2]
+        span = visible_xy.max(axis=0) - visible_xy.min(axis=0)
+        scale = max(float(np.hypot(span[0], span[1])), 1.0)
+        normalized = np.zeros((keypoints.shape[0], 3), dtype=np.float32)
+        normalized[:, :2] = (keypoints[:, :2] - origin) / scale
+        normalized[:, 2] = np.clip(keypoints[:, 2], 0.0, 1.0)
+        normalized[~visible, :2] = 0.0
+        return [tuple(float(v) for v in point) for point in normalized]
+
     def _kinematics(self, track_id: int, center: tuple[float, float], timestamp: float) -> tuple[tuple[float, float], tuple[float, float]]:
         prev = self._prev.get(track_id)
         if prev is None:
@@ -125,5 +149,6 @@ class FeatureExtractor:
             posture=posture,
             bed_zone_distance=float(bed_dist),
             lean_angle=float(lean_angle),
+            normalized_keypoints=self._normalize_keypoints(keypoints),
         )
 

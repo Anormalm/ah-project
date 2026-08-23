@@ -18,6 +18,8 @@ class TemporalModelMeta:
     model_type: str = "gru"
     attention_heads: int = 2
     ff_mult: int = 2
+    num_joints: int = 17
+    dropout: float = 0.1
 
 
 class GRURiskNet:
@@ -82,6 +84,87 @@ class TinyTransformerRiskNet:
         self.model = _Model()
 
 
+class SkeletonSTGCNRiskNet:
+    """Compact ST-GCN-style classifier for normalized COCO skeleton windows."""
+
+    _COCO_EDGES = (
+        (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9),
+        (6, 8), (8, 10), (5, 11), (6, 12), (11, 12), (11, 13),
+        (13, 15), (12, 14), (14, 16),
+    )
+
+    def __init__(
+        self,
+        torch_module,
+        hidden_size: int = 32,
+        num_layers: int = 3,
+        num_joints: int = 17,
+        dropout: float = 0.1,
+    ) -> None:
+        nn = torch_module.nn
+        adjacency = np.eye(num_joints, dtype=np.float32)
+        for source, target in self._COCO_EDGES:
+            if source < num_joints and target < num_joints:
+                adjacency[source, target] = 1.0
+                adjacency[target, source] = 1.0
+        degree = np.clip(adjacency.sum(axis=1), 1.0, None)
+        inv_sqrt = np.diag(1.0 / np.sqrt(degree))
+        adjacency = inv_sqrt @ adjacency @ inv_sqrt
+
+        class _GraphTemporalBlock(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.temporal = nn.Conv2d(
+                    hidden_size,
+                    hidden_size,
+                    kernel_size=(3, 1),
+                    padding=(1, 0),
+                    groups=hidden_size,
+                    bias=False,
+                )
+                self.channel = nn.Conv2d(hidden_size, hidden_size, kernel_size=1, bias=False)
+                self.norm = nn.BatchNorm2d(hidden_size)
+                self.activation = nn.GELU()
+                self.dropout = nn.Dropout(dropout)
+
+            def forward(self, x, graph):
+                spatial = torch_module.einsum("btvc,vw->btwc", x, graph)
+                z = spatial.permute(0, 3, 1, 2)
+                z = self.dropout(self.activation(self.norm(self.channel(self.temporal(z)))))
+                return x + z.permute(0, 2, 3, 1)
+
+        class _Model(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.register_buffer("adjacency", torch_module.tensor(adjacency, dtype=torch_module.float32))
+                self.input_projection = nn.Linear(5, hidden_size)
+                self.blocks = nn.ModuleList([_GraphTemporalBlock() for _ in range(max(1, num_layers))])
+                self.norm = nn.LayerNorm(hidden_size)
+                self.head = nn.Sequential(
+                    nn.Linear(hidden_size, hidden_size),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(hidden_size, 1),
+                )
+
+            def forward(self, x):
+                if x.ndim != 4:
+                    raise ValueError("ST-GCN input must have shape [batch,time,joints,channels]")
+                coordinates = x[..., :2]
+                confidence = x[..., 2:3].clamp(0.0, 1.0)
+                motion = torch_module.zeros_like(coordinates)
+                motion[:, 1:] = coordinates[:, 1:] - coordinates[:, :-1]
+                z = self.input_projection(torch_module.cat([coordinates, confidence, motion], dim=-1))
+                for block in self.blocks:
+                    z = block(z, self.adjacency)
+                z = self.norm(z)
+                weights = confidence.expand_as(z)
+                pooled = (z * weights).sum(dim=(1, 2)) / weights.sum(dim=(1, 2)).clamp_min(1e-6)
+                return torch_module.sigmoid(self.head(pooled))
+
+        self.model = _Model()
+
+
 class HeuristicTemporalEngine(InferenceEngine):
     def predict(self, inputs: np.ndarray) -> float:
         features = inputs
@@ -104,6 +187,14 @@ class NullTemporalEngine(InferenceEngine):
 
 
 def _build_torch_model(torch_module, meta: TemporalModelMeta):
+    if meta.model_type == "stgcn":
+        return SkeletonSTGCNRiskNet(
+            torch_module=torch_module,
+            hidden_size=meta.hidden_size,
+            num_layers=meta.num_layers,
+            num_joints=meta.num_joints,
+            dropout=meta.dropout,
+        ).model
     if meta.model_type == "transformer_lite":
         return TinyTransformerRiskNet(
             torch_module=torch_module,
@@ -129,7 +220,10 @@ class TorchTemporalInferenceEngine(InferenceEngine):
             raise RuntimeError("torch is required for torch temporal inference backends") from exc
 
         self._torch = torch
-        checkpoint = torch.load(model_path, map_location=device)
+        try:
+            checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+        except TypeError:
+            checkpoint = torch.load(model_path, map_location=device)
 
         meta = TemporalModelMeta(model_type=force_model_type or "gru")
         state_dict = checkpoint
@@ -147,6 +241,8 @@ class TorchTemporalInferenceEngine(InferenceEngine):
                 model_type=model_type,
                 attention_heads=int(checkpoint.get("attention_heads", 2)),
                 ff_mult=int(checkpoint.get("ff_mult", 2)),
+                num_joints=int(checkpoint.get("num_joints", 17)),
+                dropout=float(checkpoint.get("dropout", 0.1)),
             )
             state_dict = checkpoint["model_state_dict"]
             feature_mean = checkpoint.get("feature_mean")
@@ -157,13 +253,15 @@ class TorchTemporalInferenceEngine(InferenceEngine):
         self.model.eval()
         self.device = device
         self.meta = meta
+        self.input_kind = "skeleton" if meta.model_type == "stgcn" else "biomechanics"
 
         if feature_mean is None or feature_std is None:
             self._feature_mean = None
             self._feature_std = None
         else:
-            self._feature_mean = torch.tensor(feature_mean, dtype=torch.float32, device=device).reshape(1, 1, -1)
-            self._feature_std = torch.tensor(feature_std, dtype=torch.float32, device=device).reshape(1, 1, -1)
+            stat_shape = (1, 1, 1, -1) if self.input_kind == "skeleton" else (1, 1, -1)
+            self._feature_mean = torch.tensor(feature_mean, dtype=torch.float32, device=device).reshape(stat_shape)
+            self._feature_std = torch.tensor(feature_std, dtype=torch.float32, device=device).reshape(stat_shape)
 
     def predict(self, inputs: np.ndarray) -> float:
         features = inputs
@@ -185,6 +283,11 @@ class TorchTransformerLiteInferenceEngine(TorchTemporalInferenceEngine):
         super().__init__(model_path=model_path, device=device, force_model_type="transformer_lite")
 
 
+class TorchSTGCNInferenceEngine(TorchTemporalInferenceEngine):
+    def __init__(self, model_path: str, device: str = "cpu") -> None:
+        super().__init__(model_path=model_path, device=device, force_model_type="stgcn")
+
+
 class TemporalRiskModel:
     def __init__(
         self,
@@ -192,11 +295,13 @@ class TemporalRiskModel:
         sequence_len: int = 16,
         infer_interval: int = 1,
         min_infer_steps: int = 2,
+        min_pose_quality: float = 0.20,
     ) -> None:
         self.backend = backend
         self.sequence_len = sequence_len
         self.infer_interval = max(1, int(infer_interval))
         self.min_infer_steps = max(2, int(min_infer_steps))
+        self.min_pose_quality = float(np.clip(min_pose_quality, 0.0, 1.0))
         self._infer_counter: dict[int, int] = {}
         self._cached_prob: dict[int, float] = {}
 
@@ -226,9 +331,26 @@ class TemporalRiskModel:
             return np.zeros((0, 5), dtype=np.float32)
         return np.array(rows, dtype=np.float32)
 
+    def _to_skeleton_features(self, sequence: Sequence[FeatureVector]) -> np.ndarray:
+        rows: list[np.ndarray] = []
+        num_joints = int(getattr(getattr(self.backend, "meta", None), "num_joints", 17))
+        for feature in sequence[-self.sequence_len :]:
+            keypoints = np.asarray(feature.normalized_keypoints, dtype=np.float32)
+            if keypoints.ndim != 2 or keypoints.shape[1] != 3:
+                keypoints = np.zeros((num_joints, 3), dtype=np.float32)
+            if keypoints.shape[0] < num_joints:
+                keypoints = np.pad(keypoints, ((0, num_joints - keypoints.shape[0]), (0, 0)))
+            rows.append(keypoints[:num_joints])
+        if not rows:
+            return np.zeros((0, num_joints, 3), dtype=np.float32)
+        return np.stack(rows).astype(np.float32)
+
     def predict(self, sequence: Sequence[FeatureVector], track_id: int | None = None) -> float:
-        features = self._to_features(sequence)
+        input_kind = str(getattr(self.backend, "input_kind", "biomechanics"))
+        features = self._to_skeleton_features(sequence) if input_kind == "skeleton" else self._to_features(sequence)
         if features.shape[0] < self.min_infer_steps:
+            return 0.0
+        if input_kind == "skeleton" and float(features[..., 2].mean()) < self.min_pose_quality:
             return 0.0
 
         if track_id is None or self.infer_interval <= 1:

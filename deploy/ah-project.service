@@ -10,7 +10,7 @@ Group=ahproject
 WorkingDirectory=/opt/ah-project
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/ah-project/ah-project.env
-ExecStart=/opt/ah-project/.venv-jetson/bin/python /opt/ah-project/run.py --config /opt/ah-project/config/jetson_orin_nx_rtsp.yaml
+ExecStart=/opt/ah-project/.venv-jetson/bin/python /opt/ah-project/run.py --config /opt/ah-project/config/jetson_orin_nx_sota.yaml
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=15

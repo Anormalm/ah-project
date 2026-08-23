@@ -19,7 +19,7 @@ def _sha256(path: Path) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify Jetson runtime dependencies and optionally warm up configured engines")
-    parser.add_argument("--config", default="config/jetson_orin_nx_rtsp.yaml")
+    parser.add_argument("--config", default="config/jetson_orin_nx_sota.yaml")
     parser.add_argument(
         "--skip-engine-check",
         action="store_true",

@@ -7,7 +7,7 @@ import numpy as np
 
 from temporal.temporal_model import TemporalModelMeta
 from temporal.trainer import GRURiskTrainer, TemporalRiskTrainer, TrainerConfig
-from temporal.training_data import load_frame_log_dataset, split_dataset
+from temporal.training_data import load_frame_log_dataset, split_dataset, split_dataset_grouped
 
 
 def test_frame_log_to_sequences(tmp_path: Path) -> None:
@@ -108,3 +108,14 @@ def test_transformer_trainer_smoke(tmp_path: Path) -> None:
     assert out.exists()
     assert artifact.get("model_type") == "transformer_lite"
     assert 0.0 <= metrics["accuracy"] <= 1.0
+
+
+def test_grouped_split_keeps_tracks_out_of_both_sets() -> None:
+    x = np.arange(24 * 2, dtype=np.float32).reshape(24, 2, 1)
+    y = np.zeros(24, dtype=np.float32)
+    w = np.ones(24, dtype=np.float32)
+    groups = np.asarray([f"session|stream|{index // 6}" for index in range(24)])
+    (x_train, _, _), (x_val, _, _) = split_dataset_grouped(x, y, w, groups, val_ratio=0.25, seed=42)
+    train_ids = {int(row[0, 0] // 12) for row in x_train}
+    val_ids = {int(row[0, 0] // 12) for row in x_val}
+    assert train_ids.isdisjoint(val_ids)

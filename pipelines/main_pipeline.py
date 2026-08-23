@@ -26,9 +26,10 @@ from temporal.temporal_model import (
     NullTemporalEngine,
     TemporalRiskModel,
     TorchGRUInferenceEngine,
+    TorchSTGCNInferenceEngine,
     TorchTransformerLiteInferenceEngine,
 )
-from tracking.tracker import ByteTrackLikeTracker
+from tracking.tracker import ByteTrackLikeTracker, PoseAwareKalmanTracker
 from utils.logger import setup_logger
 from utils.performance import FPSMonitor, PerformanceTracker
 from utils.schemas import Detection
@@ -87,10 +88,7 @@ class RiskDetectionPipeline:
         self.source = self._build_source()
         self.detector = self._build_detector()
         self.pose_estimator = self._build_pose_estimator()
-        self.tracker = ByteTrackLikeTracker(
-            iou_threshold=cfg["tracking"]["iou_threshold"],
-            max_misses=cfg["tracking"]["max_misses"],
-        )
+        self.tracker = self._build_tracker()
 
         bed_zones = [tuple(zone) for zone in cfg["features"].get("bed_zones", [])]
         self._bed_zones = bed_zones
@@ -162,7 +160,7 @@ class RiskDetectionPipeline:
             required_paths.append(("detection", self.cfg["detection"]["model_path"]))
         if pose_backend in {"ultralytics_pose", "movenet_torch"}:
             required_paths.append(("pose", self.cfg["pose"]["model_path"]))
-        if temporal_backend in {"torch_gru", "torch_transformer_lite", "torch_transformer"}:
+        if temporal_backend in {"torch_gru", "torch_transformer_lite", "torch_transformer", "torch_stgcn", "stgcn"}:
             required_paths.append(("temporal_model", self.cfg["temporal_model"]["model_path"]))
 
         for section, raw_path in required_paths:
@@ -295,6 +293,30 @@ class RiskDetectionPipeline:
             backend = MockPoseEngine()
         return PoseEstimator(backend=backend)
 
+    def _build_tracker(self):
+        tracker_cfg = self.cfg["tracking"]
+        backend_type = str(tracker_cfg.get("backend", "legacy_iou")).lower()
+        if backend_type in {"pose_kalman", "pose_aware", "pose_hungarian"}:
+            return PoseAwareKalmanTracker(
+                iou_threshold=float(tracker_cfg.get("iou_threshold", 0.15)),
+                max_misses=int(tracker_cfg.get("max_misses", 20)),
+                track_high_thresh=float(tracker_cfg.get("track_high_thresh", 0.35)),
+                track_low_thresh=float(tracker_cfg.get("track_low_thresh", 0.10)),
+                new_track_thresh=float(tracker_cfg.get("new_track_thresh", 0.40)),
+                pose_similarity_threshold=float(tracker_cfg.get("pose_similarity_threshold", 0.20)),
+                max_center_distance=float(tracker_cfg.get("max_center_distance", 1.25)),
+                iou_weight=float(tracker_cfg.get("iou_weight", 0.50)),
+                pose_weight=float(tracker_cfg.get("pose_weight", 0.40)),
+                motion_weight=float(tracker_cfg.get("motion_weight", 0.10)),
+                keypoint_ema_alpha=float(tracker_cfg.get("keypoint_ema_alpha", 0.70)),
+            )
+        if backend_type not in {"legacy_iou", "bytetrack_like", "iou"}:
+            raise ValueError(f"Unsupported tracking backend: {backend_type}")
+        return ByteTrackLikeTracker(
+            iou_threshold=float(tracker_cfg["iou_threshold"]),
+            max_misses=int(tracker_cfg["max_misses"]),
+        )
+
     def _build_temporal_model(self) -> TemporalRiskModel:
         tm_cfg = self.cfg["temporal_model"]
         backend_type = tm_cfg["backend"]
@@ -308,6 +330,11 @@ class RiskDetectionPipeline:
                 model_path=tm_cfg["model_path"],
                 device=self.device,
             )
+        elif backend_type in {"torch_stgcn", "stgcn"}:
+            backend = TorchSTGCNInferenceEngine(
+                model_path=tm_cfg["model_path"],
+                device=self.device,
+            )
         elif backend_type == "none":
             backend = NullTemporalEngine()
         else:
@@ -317,6 +344,7 @@ class RiskDetectionPipeline:
             sequence_len=self.pipeline_cfg.sequence_len,
             infer_interval=int(tm_cfg.get("infer_interval", 1)),
             min_infer_steps=int(tm_cfg.get("min_infer_steps", 2)),
+            min_pose_quality=float(tm_cfg.get("min_pose_quality", 0.20)),
         )
 
     def _warmup_models(self) -> None:

@@ -1,0 +1,14 @@
+extends: jetson_orin_nx_sota.yaml
+
+pipeline:
+  fps: 20
+  sequence_len: 32
+
+# The nano checkpoint at 512 is the throughput tier. Add streams below; the
+# runtime shares and serializes one TensorRT context to stay inside 16 GB.
+pose:
+  model_path: models/yolo26n-pose-fp16-512.engine
+  input_size: 512
+
+output:
+  json_log_path: output/alerts_jetson_sota_multistream.jsonl

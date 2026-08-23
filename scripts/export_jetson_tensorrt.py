@@ -38,9 +38,9 @@ def _read_optional(path: str) -> str | None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build a target-specific TensorRT engine on Jetson")
-    parser.add_argument("--weights", default="models/yolo11n-pose.pt")
+    parser.add_argument("--weights", default="models/yolo26s-pose.pt")
     parser.add_argument("--output", default=None)
-    parser.add_argument("--imgsz", type=_parse_imgsz, default=384)
+    parser.add_argument("--imgsz", type=_parse_imgsz, default=640)
     parser.add_argument("--precision", choices=["fp16", "int8"], default="fp16")
     parser.add_argument("--data", default=None, help="Representative dataset YAML; required for INT8")
     parser.add_argument("--batch", type=int, default=1)
@@ -77,6 +77,7 @@ def main() -> None:
         "workspace": max(0.25, float(args.workspace)),
         "dynamic": bool(args.dynamic),
         "device": args.device,
+        "simplify": False,
         "verbose": False,
     }
     # These names work across the Ultralytics 8.x versions used by JetPack 6.
@@ -109,6 +110,7 @@ def main() -> None:
         "imgsz": args.imgsz,
         "batch": max(1, int(args.batch)),
         "dynamic": bool(args.dynamic),
+        "simplify": False,
         "machine": machine,
         "l4t_release": _read_optional("/etc/nv_tegra_release"),
         "os_release": _read_optional("/etc/os-release"),

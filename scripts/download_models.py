@@ -13,7 +13,12 @@ def main() -> None:
     target_dir = Path("models")
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    model_names = ["yolo11n.pt", "yolo11n-pose.pt"]
+    model_names = [
+        "yolo11n.pt",
+        "yolo11n-pose.pt",
+        "yolo26n-pose.pt",
+        "yolo26s-pose.pt",
+    ]
     for name in model_names:
         model = YOLO(name)
         source = Path(str(model.ckpt_path))

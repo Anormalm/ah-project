@@ -1,0 +1,15 @@
+extends: jetson_orin_nx_sota.yaml
+
+temporal_model:
+  backend: torch_stgcn
+  model_path: models/temporal_stgcn.pt
+  infer_interval: 2
+  min_infer_steps: 8
+  min_pose_quality: 0.25
+
+risk:
+  ml_weight: 0.35
+  allow_ml_level_override: false
+
+output:
+  json_log_path: output/alerts_jetson_sota_stgcn.jsonl

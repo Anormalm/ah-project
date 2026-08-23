@@ -19,7 +19,7 @@ python3 -m venv --system-site-packages .venv-jetson
 source .venv-jetson/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements-jetson.txt
-python -m pip install --no-deps ultralytics==8.4.32
+python -m pip install --no-deps ultralytics==8.4.52
 python scripts/verify_jetson_runtime.py --skip-engine-check --skip-inference
 
-echo "Jetson environment ready. Build the engine with scripts/export_jetson_tensorrt.py."
+echo "Jetson environment ready. Build the YOLO26 pose engine with scripts/export_jetson_tensorrt.py."

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from pathlib import Path
 
 from utils.schemas import FeatureVector, RiskEvent
@@ -17,6 +18,7 @@ class TrainingDataLogger:
         self._writer: BoundedJSONLWriter | None = None
         self._registry_key: str | None = None
         self._closed = False
+        self._session_id = uuid.uuid4().hex
         if self.path is not None:
             key = str(self.path.resolve())
             with self._registry_lock:
@@ -37,6 +39,7 @@ class TrainingDataLogger:
         acc = float((feature.acceleration[0] ** 2 + feature.acceleration[1] ** 2) ** 0.5)
         payload = {
             "stream_id": stream_id,
+            "session_id": self._session_id,
             "track_id": feature.track_id,
             "timestamp": feature.timestamp,
             "speed": speed,
@@ -44,8 +47,10 @@ class TrainingDataLogger:
             "acc": acc,
             "lean": float(feature.lean_angle),
             "posture": feature.posture,
+            "normalized_keypoints": feature.normalized_keypoints,
             "risk_level": event.risk_level,
             "label": 1 if event.risk_level in {"HIGH", "CRITICAL"} else 0,
+            "label_source": "weak_rule",
         }
         line = json.dumps(payload, separators=(",", ":"))
         if self._writer is None:

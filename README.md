@@ -6,7 +6,7 @@ Production-grade, modular pipeline for real-time multi-person pose-based risk de
 
 Pipeline flow:
 
-`Camera/Video -> Detection -> Pose -> Tracking -> Feature Extraction -> Temporal Logic -> Risk Scoring -> Alerts`
+`Camera/Video -> Hardware Decode -> Pose -> Pose-Aware Tracking -> Features -> Temporal/Rules -> Risk -> Alerts`
 
 - No raw frame storage to disk.
 - In-memory processing only.
@@ -47,7 +47,7 @@ python -m pip install -U pip setuptools wheel
 python -m pip install -r requirements.txt
 ```
 
-## 3 Starter Stacks (Different Pipelines)
+## Starter / Research Stacks
 
 ### 1) Stack A - Ultralytics one-stage pose (fast prototype)
 
@@ -61,13 +61,13 @@ python run.py --config config/stack1_ultralytics_pose_fast.yaml
 python run.py --config config/stack2_ultralytics_twostage_balanced.yaml
 ```
 
-### 3) Stack C - RTMO (SOTA track for ward-scale multi-person)
+### 3) Stack C - RTMO high-accuracy research profile
 
 ```powershell
 python run.py --config config/stack3_rtmo_mmpose_ward6.yaml
 ```
 
-### 4) Stack D - SOTA Temporal (Transformer Lite, low-latency)
+### 4) Stack D - Transformer Lite temporal prototype
 
 ```powershell
 python run.py --config config/stack2_sota_transformer_realtime.yaml
@@ -255,23 +255,30 @@ cd /opt/ah-project
 chmod +x scripts/setup_jetson.sh
 ./scripts/setup_jetson.sh
 
-# Build the device-specific FP16 engine on the target Orin NX.
+# Download YOLO26 pose checkpoints, then build both target-specific candidates.
+.venv-jetson/bin/python scripts/download_models.py
 .venv-jetson/bin/python scripts/export_jetson_tensorrt.py \
-  --weights models/yolo11n-pose.pt \
-  --imgsz 384 \
+  --weights models/yolo26s-pose.pt \
+  --imgsz 640 \
   --precision fp16 \
-  --output models/yolo11n-pose-fp16-384.engine
+  --output models/yolo26s-pose-fp16-640.engine
+
+.venv-jetson/bin/python scripts/export_jetson_tensorrt.py \
+  --weights models/yolo26n-pose.pt \
+  --imgsz 512 \
+  --precision fp16 \
+  --output models/yolo26n-pose-fp16-512.engine
 
 .venv-jetson/bin/python scripts/verify_jetson_runtime.py \
-  --config config/jetson_orin_nx_rtsp.yaml
+  --config config/jetson_orin_nx_sota.yaml
 ```
 
 Set the RTSP URL outside Git and edit the codec/calibrated bed zones in
-`config/jetson_orin_nx_rtsp.yaml`, then run:
+`config/jetson_orin_nx_sota.yaml`, then run:
 
 ```bash
 export AH_RTSP_URL='rtsp://camera-host/path'
-.venv-jetson/bin/python run.py --config config/jetson_orin_nx_rtsp.yaml
+.venv-jetson/bin/python run.py --config config/jetson_orin_nx_sota.yaml
 ```
 
 The Jetson profile:
@@ -282,6 +289,24 @@ The Jetson profile:
 - keeps one pending frame, reconnects after runtime failures, and warms the engine before capture;
 - batches JSONL writes, rate-limits/queues dashboard JPEG encoding, and disables training logs;
 - binds the dashboard to localhost by default. Put authenticated TLS termination in front of it before remote access.
+
+The SOTA profiles add YOLO26 pose and pose-aware Kalman/Hungarian association:
+
+- `config/jetson_orin_nx_sota.yaml`: YOLO26s-pose at 640, balanced single-camera profile;
+- `config/jetson_orin_nx_sota_multistream.yaml`: YOLO26n-pose at 512, throughput profile;
+- `config/jetson_orin_nx_sota_stgcn.yaml`: optional skeleton graph-temporal model after local training and validation.
+
+Benchmark both engines on representative footage before choosing a profile:
+
+```bash
+.venv-jetson/bin/python scripts/benchmark_pose_models.py \
+  --source /data/representative-ward.mp4 \
+  --target-fps 15 \
+  --iterations 200
+```
+
+See `models/SOTA_MODELS.md` for the model policy, RTMO/RTMPose alternatives,
+ST-GCN training requirements, and the DeepStream scaling boundary.
 
 TensorRT engines are target-specific. Rebuild them on the deployed Orin NX after
 JetPack/TensorRT upgrades. Start with FP16; use INT8 only with representative
@@ -294,7 +319,7 @@ Run a one-hour thermal/memory soak test after camera and model validation:
 
 ```bash
 chmod +x scripts/soak_test_jetson.sh
-scripts/soak_test_jetson.sh 3600 config/jetson_orin_nx_rtsp.yaml
+scripts/soak_test_jetson.sh 3600 config/jetson_orin_nx_sota.yaml
 ```
 
 Application metrics include capture/drop/reconnect counts and recent p50/p95/p99

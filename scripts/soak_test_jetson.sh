@@ -2,7 +2,7 @@
 set -euo pipefail
 
 duration_sec="${1:-3600}"
-config_path="${2:-config/jetson_orin_nx_rtsp.yaml}"
+config_path="${2:-config/jetson_orin_nx_sota.yaml}"
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 run_dir="$project_dir/output/soak-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$run_dir"

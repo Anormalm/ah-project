@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from temporal.temporal_model import GRURiskNet, TinyTransformerRiskNet, TemporalModelMeta
+from temporal.temporal_model import GRURiskNet, SkeletonSTGCNRiskNet, TinyTransformerRiskNet, TemporalModelMeta
 
 
 @dataclass
@@ -19,6 +19,7 @@ class TrainerConfig:
     device: str = "cpu"
     seed: int = 42
     model_type: str = "gru"
+    focal_gamma: float = 2.0
 
 
 def _set_seed(torch_module, seed: int) -> None:
@@ -68,6 +69,14 @@ def _roc_auc(y_true: np.ndarray, y_prob: np.ndarray) -> float:
 
 
 def _build_model(torch_module, meta: TemporalModelMeta):
+    if meta.model_type == "stgcn":
+        return SkeletonSTGCNRiskNet(
+            torch_module=torch_module,
+            hidden_size=meta.hidden_size,
+            num_layers=meta.num_layers,
+            num_joints=meta.num_joints,
+            dropout=meta.dropout,
+        ).model
     if meta.model_type == "transformer_lite":
         return TinyTransformerRiskNet(
             torch_module=torch_module,
@@ -96,9 +105,15 @@ class TemporalRiskTrainer:
     def _normalize(self, x_train: np.ndarray, x_val: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         mean = x_train.reshape(-1, x_train.shape[-1]).mean(axis=0)
         std = x_train.reshape(-1, x_train.shape[-1]).std(axis=0)
+        if x_train.ndim == 4 and x_train.shape[-1] == 3:
+            # Skeleton x/y are normalized per person, while confidence is already
+            # calibrated to [0, 1] and must remain meaningful for quality pooling.
+            mean[2] = 0.0
+            std[2] = 1.0
         std = np.clip(std, 1e-6, None)
-        train_norm = (x_train - mean.reshape(1, 1, -1)) / std.reshape(1, 1, -1)
-        val_norm = (x_val - mean.reshape(1, 1, -1)) / std.reshape(1, 1, -1)
+        stat_shape = (1,) * (x_train.ndim - 1) + (-1,)
+        train_norm = (x_train - mean.reshape(stat_shape)) / std.reshape(stat_shape)
+        val_norm = (x_val - mean.reshape(stat_shape)) / std.reshape(stat_shape)
         return train_norm.astype(np.float32), val_norm.astype(np.float32), mean.astype(np.float32), std.astype(np.float32)
 
     def train(
@@ -108,6 +123,8 @@ class TemporalRiskTrainer:
         x_val: np.ndarray,
         y_val: np.ndarray,
         model_meta: TemporalModelMeta | None = None,
+        w_train: np.ndarray | None = None,
+        w_val: np.ndarray | None = None,
     ) -> tuple[dict[str, float], dict]:
         torch = self._torch
         if model_meta is None:
@@ -128,17 +145,25 @@ class TemporalRiskTrainer:
                     model_type=self.cfg.model_type,
                     attention_heads=model_meta.attention_heads,
                     ff_mult=model_meta.ff_mult,
+                    num_joints=model_meta.num_joints,
+                    dropout=model_meta.dropout,
                 )
 
         x_train, x_val, feature_mean, feature_std = self._normalize(x_train, x_val if x_val.size > 0 else x_train[:1])
 
         model = _build_model(torch, meta).to(self.cfg.device)
-        criterion = torch.nn.BCELoss()
         optimizer = torch.optim.AdamW(model.parameters(), lr=self.cfg.learning_rate, weight_decay=self.cfg.weight_decay)
 
         train_x_t = torch.from_numpy(x_train).to(self.cfg.device)
         train_y_t = torch.from_numpy(y_train.reshape(-1, 1)).to(self.cfg.device)
+        if w_train is None:
+            w_train = np.ones_like(y_train, dtype=np.float32)
+        train_w_t = torch.from_numpy(w_train.astype(np.float32).reshape(-1, 1)).to(self.cfg.device)
         val_x_t = torch.from_numpy(x_val).to(self.cfg.device) if x_val.size > 0 else None
+        _ = w_val
+        positive_count = max(float((y_train > 0.5).sum()), 1.0)
+        negative_count = max(float((y_train <= 0.5).sum()), 1.0)
+        positive_weight = negative_count / positive_count
 
         best_state = None
         best_score = -1.0
@@ -150,9 +175,13 @@ class TemporalRiskTrainer:
             for batch_idx in _batch_indices(train_x_t.shape[0], self.cfg.batch_size, rng):
                 bx = train_x_t[batch_idx]
                 by = train_y_t[batch_idx]
+                bw = train_w_t[batch_idx]
                 optimizer.zero_grad()
                 pred = model(bx)
-                loss = criterion(pred, by)
+                bce = torch.nn.functional.binary_cross_entropy(pred, by, reduction="none")
+                pt = torch.where(by > 0.5, pred, 1.0 - pred).clamp(1e-6, 1.0)
+                class_weight = torch.where(by > 0.5, positive_weight, 1.0)
+                loss = (bce * torch.pow(1.0 - pt, self.cfg.focal_gamma) * class_weight * bw).mean()
                 loss.backward()
                 optimizer.step()
 
@@ -188,6 +217,8 @@ class TemporalRiskTrainer:
             "model_type": meta.model_type,
             "attention_heads": meta.attention_heads,
             "ff_mult": meta.ff_mult,
+            "num_joints": meta.num_joints,
+            "dropout": meta.dropout,
             "feature_mean": feature_mean.tolist(),
             "feature_std": feature_std.tolist(),
         }

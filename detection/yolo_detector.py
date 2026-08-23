@@ -9,23 +9,54 @@ from utils.schemas import Detection
 
 
 class UltralyticsYOLOEngine(InferenceEngine):
-    def __init__(self, model_path: str, device: str = "cpu") -> None:
+    def __init__(
+        self,
+        model_path: str,
+        device: str = "cpu",
+        input_size: int | tuple[int, int] | list[int] = 640,
+        conf_threshold: float = 0.4,
+        person_class_id: int = 0,
+        allow_cpu_fallback: bool = False,
+    ) -> None:
         try:
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError("ultralytics package is required for YOLO backend") from exc
         self._model = YOLO(model_path)
+        self.model_path = model_path
         self._device = device
+        self.input_size = input_size
+        self.conf_threshold = float(conf_threshold)
+        self.person_class_id = int(person_class_id)
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
+        self._is_tensorrt = str(model_path).lower().endswith(".engine")
 
     def predict(self, inputs: np.ndarray | list[np.ndarray]):
+        kwargs = {
+            "device": self._device,
+            "verbose": False,
+            "imgsz": self.input_size,
+            "conf": self.conf_threshold,
+            "classes": [self.person_class_id],
+            "rect": False,
+        }
         try:
-            return self._model.predict(inputs, device=self._device, verbose=False)
+            return self._model.predict(inputs, **kwargs)
         except Exception as exc:
             message = str(exc).lower()
-            if self._device != "cpu" and "torchvision::nms" in message:
+            can_fallback = self.allow_cpu_fallback and not self._is_tensorrt and self._device != "cpu"
+            if can_fallback and ("torchvision::nms" in message or "cuda" in message):
                 self._device = "cpu"
-                return self._model.predict(inputs, device=self._device, verbose=False)
+                kwargs["device"] = "cpu"
+                return self._model.predict(inputs, **kwargs)
             raise
+
+    def warmup(self) -> None:
+        if isinstance(self.input_size, (tuple, list)):
+            height, width = self.input_size
+        else:
+            height = width = int(self.input_size)
+        self.predict(np.zeros((height, width, 3), dtype=np.uint8))
 
 
 class MockDetectionEngine(InferenceEngine):

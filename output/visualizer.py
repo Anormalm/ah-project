@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -37,6 +37,10 @@ class VisualizationConfig:
     window_scale: float = 1.0
     quit_key: str = "q"
     quit_keys: list[str] | None = None
+    privacy_mode: str = "none"  # none | person_blur | person_pixelate | face_blur | face_pixelate | skeleton_only
+    privacy_blur_kernel: int = 41
+    privacy_pixelate_size: int = 14
+    privacy_expand_ratio: float = 0.12
 
 
 class Visualizer:
@@ -52,6 +56,7 @@ class Visualizer:
         self.cfg = cfg
         self.window_name = f"RiskView:{stream_id}"
         self._display_available = True
+        self._last_output_frame: np.ndarray | None = None
         keys = cfg.quit_keys if cfg.quit_keys else [cfg.quit_key, "esc"]
         self._quit_keycodes = set()
         for key in keys:
@@ -59,6 +64,133 @@ class Visualizer:
                 self._quit_keycodes.add(27)
             elif key:
                 self._quit_keycodes.add(ord(key.lower()[0]))
+
+    def get_last_output_frame(self) -> np.ndarray | None:
+        return self._last_output_frame
+
+    @staticmethod
+    def _clip_bbox(frame: np.ndarray, bbox: tuple[int, int, int, int]) -> tuple[int, int, int, int] | None:
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = bbox
+        x1 = max(0, min(x1, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        x2 = max(0, min(x2, w - 1))
+        y2 = max(0, min(y2, h - 1))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return x1, y1, x2, y2
+
+    def _expand_bbox(self, bbox: tuple[float, float, float, float], frame: np.ndarray) -> tuple[int, int, int, int] | None:
+        x1, y1, x2, y2 = bbox
+        w = max(1.0, x2 - x1)
+        h = max(1.0, y2 - y1)
+        ex = w * self.cfg.privacy_expand_ratio
+        ey = h * self.cfg.privacy_expand_ratio
+        return self._clip_bbox(frame, (int(x1 - ex), int(y1 - ey), int(x2 + ex), int(y2 + ey)))
+
+    @staticmethod
+    def _ensure_odd(v: int) -> int:
+        k = max(3, int(v))
+        return k if k % 2 == 1 else k + 1
+
+    def _blur_region(self, frame: np.ndarray, bbox: tuple[int, int, int, int]) -> None:
+        x1, y1, x2, y2 = bbox
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return
+        kernel = self._ensure_odd(self.cfg.privacy_blur_kernel)
+        frame[y1:y2, x1:x2] = cv2.GaussianBlur(roi, (kernel, kernel), 0)
+
+    def _pixelate_region(self, frame: np.ndarray, bbox: tuple[int, int, int, int]) -> None:
+        x1, y1, x2, y2 = bbox
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return
+        h, w = roi.shape[:2]
+        cell = max(4, int(self.cfg.privacy_pixelate_size))
+        dw = max(1, w // cell)
+        dh = max(1, h // cell)
+        small = cv2.resize(roi, (dw, dh), interpolation=cv2.INTER_LINEAR)
+        frame[y1:y2, x1:x2] = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    def _person_regions(self, frame: np.ndarray, detections: list[Detection], tracks: list[TrackPose]) -> list[tuple[int, int, int, int]]:
+        boxes: list[tuple[int, int, int, int]] = []
+        for det in detections:
+            box = self._expand_bbox(det.bbox, frame)
+            if box is not None:
+                boxes.append(box)
+
+        if boxes:
+            return boxes
+
+        for track in tracks:
+            pts = np.array(track.keypoints, dtype=np.float32)
+            valid = pts[pts[:, 2] >= self.cfg.keypoint_conf_threshold]
+            if valid.size == 0:
+                continue
+            bbox = (
+                float(valid[:, 0].min()),
+                float(valid[:, 1].min()),
+                float(valid[:, 0].max()),
+                float(valid[:, 1].max()),
+            )
+            box = self._expand_bbox(bbox, frame)
+            if box is not None:
+                boxes.append(box)
+        return boxes
+
+    def _face_region(self, frame: np.ndarray, track: TrackPose) -> tuple[int, int, int, int] | None:
+        head_indices = [0, 1, 2, 3, 4]
+        pts = np.array(track.keypoints, dtype=np.float32)
+        if pts.shape[0] < 5:
+            return None
+        head = pts[head_indices]
+        head = head[head[:, 2] >= self.cfg.keypoint_conf_threshold]
+        if head.shape[0] < 2:
+            return None
+        x1, y1 = float(head[:, 0].min()), float(head[:, 1].min())
+        x2, y2 = float(head[:, 0].max()), float(head[:, 1].max())
+        w = max(12.0, x2 - x1)
+        h = max(12.0, y2 - y1)
+        margin_x = 0.9 * w
+        margin_y = 1.0 * h
+        return self._clip_bbox(frame, (int(x1 - margin_x), int(y1 - margin_y), int(x2 + margin_x), int(y2 + margin_y)))
+
+    def _apply_privacy(self, frame: np.ndarray, detections: list[Detection], tracks: list[TrackPose]) -> np.ndarray:
+        mode = str(self.cfg.privacy_mode or "none").lower()
+        if mode in {"none", "off", "false"}:
+            return frame.copy()
+
+        if mode == "skeleton_only":
+            return np.zeros_like(frame)
+
+        canvas = frame.copy()
+        if mode in {"person_blur", "person_pixelate"}:
+            for box in self._person_regions(canvas, detections, tracks):
+                if mode == "person_pixelate":
+                    self._pixelate_region(canvas, box)
+                else:
+                    self._blur_region(canvas, box)
+            return canvas
+
+        if mode in {"face_blur", "face_pixelate"}:
+            face_count = 0
+            for track in tracks:
+                face = self._face_region(canvas, track)
+                if face is None:
+                    continue
+                face_count += 1
+                if mode == "face_pixelate":
+                    self._pixelate_region(canvas, face)
+                else:
+                    self._blur_region(canvas, face)
+            # fallback: if faces are not detected reliably, anonymize full person regions
+            if face_count == 0:
+                for box in self._person_regions(canvas, detections, tracks):
+                    self._blur_region(canvas, box)
+            return canvas
+
+        return frame.copy()
 
     def _draw_pose(self, frame: np.ndarray, keypoints: list[tuple[float, float, float]]) -> None:
         pts = np.array(keypoints, dtype=np.float32)
@@ -85,19 +217,16 @@ class Visualizer:
             return (0, 0)
         return int(valid[:, 0].mean()), int(valid[:, 1].mean())
 
-    def render(
+    def _compose_frame(
         self,
         frame: np.ndarray,
         detections: list[Detection],
         tracks: list[TrackPose],
         risk_events: dict[int, RiskEvent],
         fps: float,
-        bed_zones: list[tuple[float, float, float, float]] | None = None,
-    ) -> bool:
-        if not self.cfg.enabled or not self._display_available:
-            return True
-
-        canvas = frame
+        bed_zones: list[tuple[float, float, float, float]] | None,
+    ) -> np.ndarray:
+        canvas = self._apply_privacy(frame, detections, tracks)
 
         if self.cfg.show_bed_zones:
             for i, zone in enumerate(bed_zones or []):
@@ -154,12 +283,37 @@ class Visualizer:
         if self.cfg.show_fps:
             cv2.putText(canvas, f"FPS {fps:.2f}", (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
+        return canvas
+
+    def render(
+        self,
+        frame: np.ndarray,
+        detections: list[Detection],
+        tracks: list[TrackPose],
+        risk_events: dict[int, RiskEvent],
+        fps: float,
+        bed_zones: list[tuple[float, float, float, float]] | None = None,
+    ) -> bool:
+        canvas = self._compose_frame(
+            frame=frame,
+            detections=detections,
+            tracks=tracks,
+            risk_events=risk_events,
+            fps=fps,
+            bed_zones=bed_zones,
+        )
+        self._last_output_frame = canvas
+
+        if not self.cfg.enabled or not self._display_available:
+            return True
+
+        display_canvas = canvas
         if self.cfg.window_scale != 1.0:
-            h, w = canvas.shape[:2]
-            canvas = cv2.resize(canvas, (int(w * self.cfg.window_scale), int(h * self.cfg.window_scale)))
+            h, w = display_canvas.shape[:2]
+            display_canvas = cv2.resize(display_canvas, (int(w * self.cfg.window_scale), int(h * self.cfg.window_scale)))
 
         try:
-            cv2.imshow(self.window_name, canvas)
+            cv2.imshow(self.window_name, display_canvas)
             key = cv2.waitKey(1) & 0xFF
             if key in self._quit_keycodes:
                 return False
@@ -178,4 +332,3 @@ class Visualizer:
             cv2.destroyWindow(self.window_name)
         except cv2.error:
             pass
-

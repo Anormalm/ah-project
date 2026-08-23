@@ -10,6 +10,9 @@ class _RiskState:
     ema_score: float
     last_level: str
     last_level_change_ts: float
+    emitted_level: str
+    high_run: int
+    critical_run: int
 
 
 class RiskScorer:
@@ -24,6 +27,8 @@ class RiskScorer:
         allow_ml_level_override: bool = True,
         ema_alpha: float = 0.35,
         downgrade_grace_sec: float = 2.0,
+        high_consecutive_frames: int = 3,
+        critical_consecutive_frames: int = 2,
     ) -> None:
         self.ml_weight = ml_weight
         self.medium_threshold = medium_threshold
@@ -32,7 +37,12 @@ class RiskScorer:
         self.allow_ml_level_override = allow_ml_level_override
         self.ema_alpha = ema_alpha
         self.downgrade_grace_sec = downgrade_grace_sec
+        self.high_consecutive_frames = max(1, int(high_consecutive_frames))
+        self.critical_consecutive_frames = max(1, int(critical_consecutive_frames))
         self._state: dict[int, _RiskState] = {}
+
+    def remove_track(self, track_id: int) -> None:
+        self._state.pop(int(track_id), None)
 
     @staticmethod
     def _level_from_prob(prob: float, medium: float, high: float, critical: float) -> str:
@@ -59,10 +69,14 @@ class RiskScorer:
     def _stabilize(self, track_id: int, raw_score: float, raw_level: str, ts: float) -> tuple[float, str]:
         prev = self._state.get(track_id)
         if prev is None:
+            initial_emitted = raw_level if self._rank.get(raw_level, 0) <= self._rank["MEDIUM"] else "LOW"
             self._state[track_id] = _RiskState(
                 ema_score=raw_score,
                 last_level=raw_level,
                 last_level_change_ts=ts,
+                emitted_level=initial_emitted,
+                high_run=0,
+                critical_run=0,
             )
             return raw_score, raw_level
 
@@ -81,6 +95,9 @@ class RiskScorer:
             ema_score=ema,
             last_level=stable_level,
             last_level_change_ts=level_change_ts,
+            emitted_level=prev.emitted_level,
+            high_run=prev.high_run,
+            critical_run=prev.critical_run,
         )
         return ema, stable_level
 
@@ -98,12 +115,32 @@ class RiskScorer:
         if ml_probability >= self.high_threshold:
             reasons.append("ml_high_probability")
 
+        state = self._state[rule_decision.track_id]
+        if final_level in {"HIGH", "CRITICAL"}:
+            state.high_run += 1
+        else:
+            state.high_run = 0
+        if final_level == "CRITICAL":
+            state.critical_run += 1
+        else:
+            state.critical_run = 0
+
+        prev_emitted = state.emitted_level
+        protected_fall = "sudden_vertical_drop" in reasons
+        guarded_level = final_level
+        if not protected_fall:
+            if guarded_level == "CRITICAL" and state.critical_run < self.critical_consecutive_frames:
+                guarded_level = prev_emitted if self._rank[prev_emitted] >= self._rank["HIGH"] else "HIGH"
+            if guarded_level == "HIGH" and state.high_run < self.high_consecutive_frames:
+                guarded_level = prev_emitted
+        state.emitted_level = guarded_level
+
         return RiskEvent(
             track_id=rule_decision.track_id,
-            risk_level=final_level,
+            risk_level=guarded_level,
             confidence=float(max(0.0, min(1.0, confidence))),
             timestamp=rule_decision.timestamp,
-            event=self._event_type(final_level, reasons),
+            event=self._event_type(guarded_level, reasons),
             reasons=reasons,
         )
 

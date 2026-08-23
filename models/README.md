@@ -8,3 +8,8 @@ Place model artifacts here:
 Future deployment artifacts:
 - ONNX exports (`*.onnx`)
 - TensorRT engines (`*.engine`)
+
+Jetson Orin NX engines must be built on the target device. The default Jetson
+profile expects `yolo11n-pose-fp16-384.engine`; create it with
+`scripts/export_jetson_tensorrt.py`. The adjacent `.engine.json` manifest records
+the source/engine hashes and build environment.

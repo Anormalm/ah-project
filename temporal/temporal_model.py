@@ -200,6 +200,11 @@ class TemporalRiskModel:
         self._infer_counter: dict[int, int] = {}
         self._cached_prob: dict[int, float] = {}
 
+    def remove_track(self, track_id: int) -> None:
+        tid = int(track_id)
+        self._infer_counter.pop(tid, None)
+        self._cached_prob.pop(tid, None)
+
     @staticmethod
     def _posture_to_scalar(posture: str) -> float:
         mapping = {"unknown": 0.0, "standing": 0.2, "sitting": 0.6, "lying": 1.0}

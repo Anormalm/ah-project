@@ -215,6 +215,21 @@ Latency note:
 - `temporal_model.infer_interval` controls how often temporal inference runs per track.
 - Example: `infer_interval: 2` computes temporal ML every second frame and reuses cached probability in between to protect FPS.
 
+Alert-fatigue control:
+- `risk.high_consecutive_frames` and `risk.critical_consecutive_frames` require sustained severity before escalating.
+- `output.alert_suppression.emit_on_level_change_only` reduces repeated duplicates.
+- `output.alert_suppression.dedupe_window_sec` suppresses same-level repeats inside a short window.
+
+Privacy display control:
+- `output.visualization.privacy_mode` supports:
+  - `none`
+  - `person_blur` (recommended)
+  - `person_pixelate`
+  - `face_blur`
+  - `face_pixelate`
+  - `skeleton_only`
+- Current Stack B/SOTA profiles default to `person_blur` for live UI anonymization.
+
 ## Run Tests
 
 ```powershell
@@ -229,8 +244,58 @@ python -m pytest -q
 
 ## Jetson / TensorRT Readiness
 
-The code separates inference backends from pipeline logic. You can swap:
+Use JetPack-provided CUDA, TensorRT, PyTorch, torchvision and OpenCV. Do not install
+`requirements.txt` on Jetson because the PyPI `opencv-python`/PyTorch wheels can
+replace NVIDIA's accelerated packages.
 
-- PyTorch -> ONNX -> TensorRT
+Recommended JetPack 6 bring-up:
 
-without changing orchestration modules.
+```bash
+cd /opt/ah-project
+chmod +x scripts/setup_jetson.sh
+./scripts/setup_jetson.sh
+
+# Build the device-specific FP16 engine on the target Orin NX.
+.venv-jetson/bin/python scripts/export_jetson_tensorrt.py \
+  --weights models/yolo11n-pose.pt \
+  --imgsz 384 \
+  --precision fp16 \
+  --output models/yolo11n-pose-fp16-384.engine
+
+.venv-jetson/bin/python scripts/verify_jetson_runtime.py \
+  --config config/jetson_orin_nx_rtsp.yaml
+```
+
+Set the RTSP URL outside Git and edit the codec/calibrated bed zones in
+`config/jetson_orin_nx_rtsp.yaml`, then run:
+
+```bash
+export AH_RTSP_URL='rtsp://camera-host/path'
+.venv-jetson/bin/python run.py --config config/jetson_orin_nx_rtsp.yaml
+```
+
+The Jetson profile:
+
+- requires CUDA and never silently falls back to CPU;
+- uses one-stage TensorRT pose to avoid duplicate detector inference;
+- uses `nvv4l2decoder` through GStreamer for RTSP H.264/H.265 decode;
+- keeps one pending frame, reconnects after runtime failures, and warms the engine before capture;
+- batches JSONL writes, rate-limits/queues dashboard JPEG encoding, and disables training logs;
+- binds the dashboard to localhost by default. Put authenticated TLS termination in front of it before remote access.
+
+TensorRT engines are target-specific. Rebuild them on the deployed Orin NX after
+JetPack/TensorRT upgrades. Start with FP16; use INT8 only with representative
+calibration data and a measured pose/fall accuracy comparison.
+
+For a systemd deployment, adapt `deploy/ah-project.service` to the actual user,
+installation path and carrier-board environment before installing it.
+
+Run a one-hour thermal/memory soak test after camera and model validation:
+
+```bash
+chmod +x scripts/soak_test_jetson.sh
+scripts/soak_test_jetson.sh 3600 config/jetson_orin_nx_rtsp.yaml
+```
+
+Application metrics include capture/drop/reconnect counts and recent p50/p95/p99
+module latency; the soak script records `tegrastats` alongside the application log.

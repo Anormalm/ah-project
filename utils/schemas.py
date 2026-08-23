@@ -17,6 +17,7 @@ class Detection(BaseModel):
 class PoseResult(BaseModel):
     bbox: tuple[float, float, float, float]
     keypoints: list[tuple[float, float, float]]
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
     model_config = ConfigDict(frozen=True)
 

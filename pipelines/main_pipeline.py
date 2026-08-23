@@ -5,6 +5,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -13,6 +14,7 @@ from detection.yolo_detector import MockDetectionEngine, UltralyticsYOLOEngine, 
 from features.feature_extractor import FeatureExtractor
 from ingestion.rtsp_stream import create_rtsp_source
 from ingestion.video_loader import create_video_source
+from models.inference_engine import InferenceEngine, SynchronizedInferenceEngine
 from output.alert_manager import AlertManager
 from output.training_data_logger import TrainingDataLogger
 from output.visualizer import VisualizationConfig, Visualizer
@@ -34,7 +36,7 @@ from utils.schemas import Detection
 
 class StreamConfig(BaseModel):
     stream_id: str
-    type: str = Field(pattern="^(webcam|video|rtsp|dummy)$")
+    type: str = Field(pattern="^(webcam|video|rtsp|gstreamer|dummy)$")
     source: str | int
 
 
@@ -45,15 +47,42 @@ class PipelineConfig(BaseModel):
     max_frames: int | None = None
     metrics_interval_sec: float = 3.0
     sequence_len: int = 16
+    require_accelerator: bool = False
+    allow_cpu_fallback: bool = False
+    warmup_models: bool = True
+    reject_duplicate_inference: bool = False
+    share_inference_backends: bool = False
+
+
+class SharedInferenceBackends:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._backends: dict[tuple[Any, ...], SynchronizedInferenceEngine] = {}
+
+    def get_or_create(self, key: tuple[Any, ...], factory) -> InferenceEngine:
+        with self._lock:
+            backend = self._backends.get(key)
+            if backend is None:
+                backend = SynchronizedInferenceEngine(factory())
+                self._backends[key] = backend
+            return backend
 
 
 class RiskDetectionPipeline:
-    def __init__(self, stream: StreamConfig, cfg: dict[str, Any], alert_manager: AlertManager | None = None) -> None:
+    def __init__(
+        self,
+        stream: StreamConfig,
+        cfg: dict[str, Any],
+        alert_manager: AlertManager | None = None,
+        inference_backends: SharedInferenceBackends | None = None,
+    ) -> None:
         self.stream = stream
         self.cfg = cfg
         self.logger = setup_logger(name=f"pipeline.{stream.stream_id}", level=cfg["logging"]["level"])
         self.pipeline_cfg = PipelineConfig(**cfg["pipeline"])
+        self._inference_backends = inference_backends
         self.device = self._resolve_device(self.pipeline_cfg.device)
+        self._validate_runtime_configuration()
 
         self.source = self._build_source()
         self.detector = self._build_detector()
@@ -76,7 +105,12 @@ class RiskDetectionPipeline:
 
         alert_cfg = cfg["output"]
         live_stream_cfg = alert_cfg.get("live_stream", {})
+        suppress_cfg = alert_cfg.get("alert_suppression", {})
+        writer_cfg = alert_cfg.get("async_writer", {})
         self._live_stream_enabled = bool(live_stream_cfg.get("enabled", False))
+        publish_fps = max(0.1, float(live_stream_cfg.get("fps", 8.0)))
+        self._live_stream_interval = 1.0 / publish_fps
+        self._last_live_stream_ts = 0.0
         if alert_manager is None:
             self.alert_manager = AlertManager(
                 json_log_path=alert_cfg["json_log_path"],
@@ -84,7 +118,12 @@ class RiskDetectionPipeline:
                 api_host=alert_cfg["rest_api_host"],
                 api_port=alert_cfg["rest_api_port"],
                 frame_jpeg_quality=int(live_stream_cfg.get("jpeg_quality", 80)),
+                dedupe_window_sec=float(suppress_cfg.get("dedupe_window_sec", 1.0)),
+                emit_on_level_change_only=bool(suppress_cfg.get("emit_on_level_change_only", True)),
                 logger_name=f"alerts.{stream.stream_id}",
+                log_queue_size=int(writer_cfg.get("alert_queue_size", 2048)),
+                log_batch_size=int(writer_cfg.get("alert_batch_size", 64)),
+                frame_queue_size=int(writer_cfg.get("frame_queue_size", 2)),
             )
             self._owns_alert_manager = True
         else:
@@ -93,28 +132,69 @@ class RiskDetectionPipeline:
         self.alert_manager.register_stream(stream.stream_id)
         vis_cfg = VisualizationConfig(**alert_cfg.get("visualization", {}))
         self.visualizer = Visualizer(stream_id=stream.stream_id, cfg=vis_cfg)
-        self.training_logger = TrainingDataLogger(alert_cfg.get("training_log_path"))
+        self.training_logger = TrainingDataLogger(
+            alert_cfg.get("training_log_path"),
+            queue_size=int(writer_cfg.get("training_queue_size", 4096)),
+            batch_size=int(writer_cfg.get("training_batch_size", 128)),
+        )
 
         self._stop_event = threading.Event()
         self._perf = PerformanceTracker()
         self._fps = FPSMonitor()
         self._seq: dict[int, deque] = defaultdict(lambda: deque(maxlen=self.pipeline_cfg.sequence_len))
 
+    def _shared_backend(self, key: tuple[Any, ...], factory) -> InferenceEngine:
+        if self._inference_backends is None:
+            return factory()
+        return self._inference_backends.get_or_create(key, factory)
+
+    def _validate_runtime_configuration(self) -> None:
+        det_backend = str(self.cfg["detection"].get("backend", "none"))
+        pose_backend = str(self.cfg["pose"].get("backend", "mock"))
+        temporal_backend = str(self.cfg["temporal_model"].get("backend", "none"))
+        if self.pipeline_cfg.reject_duplicate_inference and det_backend == "ultralytics" and pose_backend == "ultralytics_pose":
+            raise RuntimeError(
+                "This profile rejects duplicate full-frame inference: use detection.backend=none with one-stage Ultralytics pose"
+            )
+
+        required_paths: list[tuple[str, str]] = []
+        if det_backend == "ultralytics":
+            required_paths.append(("detection", self.cfg["detection"]["model_path"]))
+        if pose_backend in {"ultralytics_pose", "movenet_torch"}:
+            required_paths.append(("pose", self.cfg["pose"]["model_path"]))
+        if temporal_backend in {"torch_gru", "torch_transformer_lite", "torch_transformer"}:
+            required_paths.append(("temporal_model", self.cfg["temporal_model"]["model_path"]))
+
+        for section, raw_path in required_paths:
+            model_path = Path(raw_path)
+            if not model_path.exists():
+                raise FileNotFoundError(f"{section} model not found: {model_path}")
+            if model_path.suffix.lower() == ".engine" and not self.device.startswith("cuda"):
+                raise RuntimeError(f"TensorRT engine requires CUDA, resolved device={self.device}: {model_path}")
+
     def _build_source(self):
         fps = self.pipeline_cfg.fps
         buffer_size = self.pipeline_cfg.buffer_size
         if self.stream.type == "rtsp":
+            ingestion_cfg = self.cfg["ingestion"]
             return create_rtsp_source(
                 rtsp_url=str(self.stream.source),
                 fps=fps,
                 buffer_size=buffer_size,
-                reconnect_interval_sec=self.cfg["ingestion"]["rtsp_reconnect_sec"],
-                max_retries=self.cfg["ingestion"]["rtsp_max_retries"],
+                reconnect_interval_sec=ingestion_cfg["rtsp_reconnect_sec"],
+                max_retries=ingestion_cfg["rtsp_max_retries"],
+                use_jetson_gstreamer=bool(ingestion_cfg.get("rtsp_use_jetson_gstreamer", False)),
+                codec=str(ingestion_cfg.get("rtsp_codec", "h264")),
+                latency_ms=int(ingestion_cfg.get("rtsp_latency_ms", 120)),
+                transport=str(ingestion_cfg.get("rtsp_transport", "tcp")),
+                runtime_reconnect=bool(ingestion_cfg.get("rtsp_runtime_reconnect", True)),
+                runtime_max_retries=ingestion_cfg.get("rtsp_runtime_max_retries"),
             )
         webcam_options = {
             "requested_fps": self.cfg["ingestion"].get("webcam_requested_fps"),
             "width": self.cfg["ingestion"].get("webcam_width"),
             "height": self.cfg["ingestion"].get("webcam_height"),
+            "backend": self.cfg["ingestion"].get("webcam_backend", "auto"),
         }
         return create_video_source(
             self.stream.type,
@@ -125,23 +205,21 @@ class RiskDetectionPipeline:
         )
 
     def _resolve_device(self, requested: str) -> str:
-        if requested not in {"auto", "cpu", "cuda"}:
-            return requested
-        if requested == "cpu":
+        normalized = str(requested).lower()
+        if normalized == "cpu":
+            if self.pipeline_cfg.require_accelerator:
+                raise RuntimeError("pipeline.require_accelerator=true is incompatible with pipeline.device=cpu")
             return "cpu"
         try:
             import torch
-            import torchvision
-        except ImportError:
+        except ImportError as exc:
+            if normalized.startswith("cuda") or self.pipeline_cfg.require_accelerator:
+                raise RuntimeError("CUDA was requested but PyTorch is not installed") from exc
             return "cpu"
         if torch.cuda.is_available():
-            try:
-                boxes = torch.tensor([[0.0, 0.0, 10.0, 10.0]], device="cuda")
-                scores = torch.tensor([0.9], device="cuda")
-                torchvision.ops.nms(boxes, scores, 0.5)
-                return "cuda"
-            except Exception:
-                return "cpu"
+            return requested if normalized.startswith("cuda") else "cuda:0"
+        if normalized.startswith("cuda") or self.pipeline_cfg.require_accelerator:
+            raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
         return "cpu"
 
     def _build_detector(self) -> YOLOPersonDetector | None:
@@ -150,9 +228,24 @@ class RiskDetectionPipeline:
         if backend_type == "none":
             return None
         if backend_type == "ultralytics":
-            backend = UltralyticsYOLOEngine(
-                model_path=det_cfg["model_path"],
-                device=self.device,
+            key = (
+                "ultralytics_detection",
+                det_cfg["model_path"],
+                self.device,
+                str(det_cfg.get("input_size", 640)),
+                float(det_cfg["conf_threshold"]),
+                int(det_cfg["person_class_id"]),
+            )
+            backend = self._shared_backend(
+                key,
+                lambda: UltralyticsYOLOEngine(
+                    model_path=det_cfg["model_path"],
+                    device=self.device,
+                    input_size=det_cfg.get("input_size", 640),
+                    conf_threshold=det_cfg["conf_threshold"],
+                    person_class_id=det_cfg["person_class_id"],
+                    allow_cpu_fallback=self.pipeline_cfg.allow_cpu_fallback,
+                ),
             )
         else:
             backend = MockDetectionEngine()
@@ -172,11 +265,25 @@ class RiskDetectionPipeline:
                 input_size=pose_cfg["input_size"],
             )
         elif backend_type == "ultralytics_pose":
-            backend = UltralyticsPoseEngine(
-                model_path=pose_cfg["model_path"],
-                device=self.device,
-                min_match_iou=pose_cfg.get("match_iou_threshold", 0.1),
-                input_size=pose_cfg.get("input_size", 256),
+            pose_conf = pose_cfg.get("conf_threshold", self.cfg["detection"].get("conf_threshold", 0.25))
+            key = (
+                "ultralytics_pose",
+                pose_cfg["model_path"],
+                self.device,
+                str(pose_cfg.get("input_size", 256)),
+                float(pose_conf),
+                float(pose_cfg.get("match_iou_threshold", 0.1)),
+            )
+            backend = self._shared_backend(
+                key,
+                lambda: UltralyticsPoseEngine(
+                    model_path=pose_cfg["model_path"],
+                    device=self.device,
+                    min_match_iou=pose_cfg.get("match_iou_threshold", 0.1),
+                    input_size=pose_cfg.get("input_size", 256),
+                    conf_threshold=pose_conf,
+                    allow_cpu_fallback=self.pipeline_cfg.allow_cpu_fallback,
+                ),
             )
         elif backend_type in {"rtmo", "rtmo_mmpose"}:
             backend = RTMOMMPoseEngine(
@@ -212,13 +319,33 @@ class RiskDetectionPipeline:
             min_infer_steps=int(tm_cfg.get("min_infer_steps", 2)),
         )
 
+    def _warmup_models(self) -> None:
+        if not self.pipeline_cfg.warmup_models:
+            return
+        warmed: set[int] = set()
+        for backend in [getattr(self.detector, "backend", None), getattr(self.pose_estimator, "backend", None)]:
+            if backend is None or id(backend) in warmed:
+                continue
+            warmup = getattr(backend, "warmup", None)
+            if callable(warmup):
+                warmup()
+                warmed.add(id(backend))
+
+    def _cleanup_track_state(self, track_ids: list[int]) -> None:
+        for track_id in track_ids:
+            self._seq.pop(track_id, None)
+            self.feature_extractor.remove_track(track_id)
+            self.rule_engine.remove_track(track_id)
+            self.temporal_model.remove_track(track_id)
+            self.risk_scorer.remove_track(track_id)
+            self.alert_manager.retire_track(self.stream.stream_id, track_id)
+
     def _detections_from_poses(self, poses) -> list[Detection]:
         det_cfg = self.cfg["detection"]
         threshold = float(det_cfg.get("conf_threshold", 0.0))
         detections: list[Detection] = []
         for pose in poses:
-            confs = [k[2] for k in pose.keypoints]
-            score = float(sum(confs) / max(len(confs), 1))
+            score = float(pose.confidence)
             if score < threshold:
                 continue
             detections.append(
@@ -235,6 +362,7 @@ class RiskDetectionPipeline:
         self._stop_event.set()
 
     def run(self) -> None:
+        self._warmup_models()
         self.source.start()
         if self._owns_alert_manager:
             self.alert_manager.start()
@@ -271,6 +399,7 @@ class RiskDetectionPipeline:
 
                 with self._perf.track("tracking"):
                     tracks = self.tracker.update(detections, poses, timestamp=ts)
+                self._cleanup_track_state(self.tracker.last_removed_track_ids)
                 risk_events: dict[int, Any] = {}
 
                 for track in tracks:
@@ -294,18 +423,29 @@ class RiskDetectionPipeline:
 
                 frame_count += 1
                 fps = self._fps.tick()
-                with self._perf.track("visualization"):
-                    keep_running = self.visualizer.render(
-                        frame=frame,
-                        detections=detections,
-                        tracks=tracks,
-                        risk_events=risk_events,
-                        fps=fps,
-                        bed_zones=self._bed_zones,
-                    )
-                if self._live_stream_enabled:
+                self.alert_manager.update_stream_health(self.stream.stream_id, fps=fps, source=self.source)
+                needs_composed_frame = self.visualizer.cfg.enabled or self._live_stream_enabled
+                if needs_composed_frame:
+                    with self._perf.track("visualization"):
+                        keep_running = self.visualizer.render(
+                            frame=frame,
+                            detections=detections,
+                            tracks=tracks,
+                            risk_events=risk_events,
+                            fps=fps,
+                            bed_zones=self._bed_zones,
+                        )
+                else:
+                    keep_running = True
+                publish_now = time.monotonic()
+                if self._live_stream_enabled and publish_now - self._last_live_stream_ts >= self._live_stream_interval:
+                    output_frame = self.visualizer.get_last_output_frame()
                     with self._perf.track("ui_stream"):
-                        self.alert_manager.publish_frame(self.stream.stream_id, frame)
+                        self.alert_manager.publish_frame(
+                            self.stream.stream_id,
+                            output_frame if output_frame is not None else frame,
+                        )
+                    self._last_live_stream_ts = publish_now
                 packet.frame = None
                 del frame
                 del detections
@@ -317,10 +457,13 @@ class RiskDetectionPipeline:
                 now = time.time()
                 if now - last_metric_ts >= self.pipeline_cfg.metrics_interval_sec:
                     self.logger.info(
-                        "stream=%s fps=%.2f memory_mb=%.2f latency=%s",
+                        "stream=%s fps=%.2f memory_mb=%.2f captured=%d dropped=%d reconnects=%d latency=%s",
                         self.stream.stream_id,
                         fps,
                         self._perf.memory_usage_mb(),
+                        int(getattr(self.source, "frames_captured", 0)),
+                        int(getattr(self.source, "frames_dropped", 0)),
+                        int(getattr(self.source, "reconnect_count", 0)),
                         self._perf.summary(),
                     )
                     last_metric_ts = now
@@ -331,6 +474,9 @@ class RiskDetectionPipeline:
         finally:
             self.source.stop()
             self.visualizer.close()
+            self.training_logger.close()
+            if self._owns_alert_manager:
+                self.alert_manager.close()
             self.logger.info("stream=%s stopped after %d frames", self.stream.stream_id, frame_count)
 
 
@@ -339,15 +485,32 @@ class MultiStreamRunner:
         stream_cfgs = [StreamConfig(**item) for item in cfg["streams"]]
         output_cfg = cfg["output"]
         live_stream_cfg = output_cfg.get("live_stream", {})
+        suppress_cfg = output_cfg.get("alert_suppression", {})
+        writer_cfg = output_cfg.get("async_writer", {})
         self.alert_manager = AlertManager(
             json_log_path=output_cfg["json_log_path"],
             enable_api=output_cfg["enable_rest_api"],
             api_host=output_cfg["rest_api_host"],
             api_port=output_cfg["rest_api_port"],
             frame_jpeg_quality=int(live_stream_cfg.get("jpeg_quality", 80)),
+            dedupe_window_sec=float(suppress_cfg.get("dedupe_window_sec", 1.0)),
+            emit_on_level_change_only=bool(suppress_cfg.get("emit_on_level_change_only", True)),
             logger_name="alerts",
+            log_queue_size=int(writer_cfg.get("alert_queue_size", 2048)),
+            log_batch_size=int(writer_cfg.get("alert_batch_size", 64)),
+            frame_queue_size=int(writer_cfg.get("frame_queue_size", 2)),
         )
-        self.pipelines = [RiskDetectionPipeline(stream=s, cfg=cfg, alert_manager=self.alert_manager) for s in stream_cfgs]
+        pipeline_cfg = PipelineConfig(**cfg["pipeline"])
+        inference_backends = SharedInferenceBackends() if pipeline_cfg.share_inference_backends else None
+        self.pipelines = [
+            RiskDetectionPipeline(
+                stream=s,
+                cfg=cfg,
+                alert_manager=self.alert_manager,
+                inference_backends=inference_backends,
+            )
+            for s in stream_cfgs
+        ]
 
     def stop(self) -> None:
         for p in self.pipelines:
@@ -372,4 +535,7 @@ class MultiStreamRunner:
                     f.result()
         except KeyboardInterrupt:
             self.stop()
+        finally:
+            self.stop()
+            self.alert_manager.close()
 

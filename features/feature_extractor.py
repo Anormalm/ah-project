@@ -30,6 +30,9 @@ class FeatureExtractor:
         self.min_kpt_conf = min_kpt_conf
         self._prev: dict[int, _PrevState] = {}
 
+    def remove_track(self, track_id: int) -> None:
+        self._prev.pop(int(track_id), None)
+
     def _center_of_mass(self, keypoints: np.ndarray) -> tuple[float, float]:
         valid = keypoints[keypoints[:, 2] >= self.min_kpt_conf]
         if valid.size == 0:
@@ -66,13 +69,18 @@ class FeatureExtractor:
         def p(idx: int) -> np.ndarray:
             return keypoints[idx, :2]
 
+        def visible(*indices: int) -> bool:
+            return all(idx < keypoints.shape[0] and keypoints[idx, 2] >= self.min_kpt_conf for idx in indices)
+
         angles = {
-            "left_knee": _angle(p(11), p(13), p(15)),
-            "right_knee": _angle(p(12), p(14), p(16)),
-            "left_hip": _angle(p(5), p(11), p(13)),
-            "right_hip": _angle(p(6), p(12), p(14)),
+            "left_knee": _angle(p(11), p(13), p(15)) if visible(11, 13, 15) else 180.0,
+            "right_knee": _angle(p(12), p(14), p(16)) if visible(12, 14, 16) else 180.0,
+            "left_hip": _angle(p(5), p(11), p(13)) if visible(5, 11, 13) else 180.0,
+            "right_hip": _angle(p(6), p(12), p(14)) if visible(6, 12, 14) else 180.0,
         }
 
+        if not visible(5, 6, 11, 12):
+            return angles, 0.0
         shoulder_mid = (p(5) + p(6)) / 2.0
         hip_mid = (p(11) + p(12)) / 2.0
         torso = shoulder_mid - hip_mid

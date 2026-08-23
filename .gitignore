@@ -4,5 +4,10 @@
 *.log
 .env
 .venv/
+.venv-jetson/
 output/*.jsonl
 models/*.pt
+models/*.onnx
+models/*.engine
+models/*.engine.json
+models/*.cache

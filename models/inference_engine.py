@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import threading
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,28 @@ class InferenceEngine(ABC):
     @abstractmethod
     def predict(self, inputs: Any) -> Any:
         raise NotImplementedError
+
+
+class SynchronizedInferenceEngine(InferenceEngine):
+    """Serialize access to a shared backend and warm it only once."""
+
+    def __init__(self, backend: InferenceEngine) -> None:
+        self.backend = backend
+        self._lock = threading.RLock()
+        self._warmed = False
+
+    def predict(self, inputs: Any) -> Any:
+        with self._lock:
+            return self.backend.predict(inputs)
+
+    def warmup(self) -> None:
+        with self._lock:
+            if self._warmed:
+                return
+            warmup = getattr(self.backend, "warmup", None)
+            if callable(warmup):
+                warmup()
+            self._warmed = True
 
 
 class OnnxRuntimeEngine(InferenceEngine):

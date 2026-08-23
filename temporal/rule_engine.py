@@ -55,6 +55,9 @@ class RuleEngine:
         self.enable_transition_rule = enable_transition_rule
         self._state: dict[int, _RuleState] = {}
 
+    def remove_track(self, track_id: int) -> None:
+        self._state.pop(int(track_id), None)
+
     def _elevate(self, current_level: str, candidate: str) -> str:
         if self._severity_rank[candidate] > self._severity_rank[current_level]:
             return candidate

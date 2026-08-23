@@ -83,6 +83,8 @@ def test_risk_downgrades_after_grace_window() -> None:
         ema_alpha=1.0,
         downgrade_grace_sec=1.0,
         allow_ml_level_override=False,
+        high_consecutive_frames=1,
+        critical_consecutive_frames=1,
     )
 
     high = RuleDecision(track_id=5, timestamp=t0, rule_score=0.85, rule_level="HIGH", reasons=["lean_instability"])
@@ -131,4 +133,27 @@ def test_temporal_infer_interval_cache() -> None:
 
     assert p1 == p2 == p3
     assert backend.calls == 2
+
+
+def test_risk_requires_consecutive_high_frames() -> None:
+    t0 = time.time()
+    scorer = RiskScorer(
+        ml_weight=0.0,
+        ema_alpha=1.0,
+        allow_ml_level_override=False,
+        high_consecutive_frames=3,
+        critical_consecutive_frames=2,
+    )
+
+    high1 = RuleDecision(track_id=22, timestamp=t0, rule_score=0.8, rule_level="HIGH", reasons=["lean_instability"])
+    high2 = RuleDecision(track_id=22, timestamp=t0 + 0.1, rule_score=0.8, rule_level="HIGH", reasons=["lean_instability"])
+    high3 = RuleDecision(track_id=22, timestamp=t0 + 0.2, rule_score=0.8, rule_level="HIGH", reasons=["lean_instability"])
+
+    e1 = scorer.score(high1, ml_probability=0.0)
+    e2 = scorer.score(high2, ml_probability=0.0)
+    e3 = scorer.score(high3, ml_probability=0.0)
+
+    assert e1.risk_level == "LOW"
+    assert e2.risk_level == "LOW"
+    assert e3.risk_level == "HIGH"
 

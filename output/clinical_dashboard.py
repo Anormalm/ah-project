@@ -14,8 +14,8 @@ def create_dashboard_app(alert_manager) -> FastAPI:
     app = FastAPI(title="Clinical Risk Dashboard", version="3.0.0")
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, Any]:
+        return alert_manager.get_health()
 
     @app.get("/alerts")
     def alerts(limit: int = 50) -> list[dict[str, Any]]:
@@ -393,7 +393,16 @@ def _dashboard_html() -> str:
             <option value=\"CRITICAL\">Critical</option>
           </select>
 
+          <label for=\"refreshMs\">Refresh Interval</label>
+          <select id=\"refreshMs\">
+            <option value=\"1000\">1s</option>
+            <option value=\"2000\">2s</option>
+            <option value=\"3000\" selected>3s</option>
+            <option value=\"5000\">5s</option>
+          </select>
+
           <div style=\"display:grid; gap:8px; margin-top:8px;\">
+            <button id=\"btnOpenOnly\" class=\"btn-muted\">Open Only: Off</button>
             <button id=\"btnSound\" class=\"btn-muted\">Alert Sound: Off</button>
             <button id=\"btnRefresh\" class=\"btn-accent\">Refresh Now</button>
           </div>
@@ -439,8 +448,10 @@ def _dashboard_html() -> str:
     const streamFeed = document.getElementById('streamFeed');
     const streamState = document.getElementById('streamState');
     const btnRefresh = document.getElementById('btnRefresh');
+    const btnOpenOnly = document.getElementById('btnOpenOnly');
     const btnSound = document.getElementById('btnSound');
     const btnFullscreen = document.getElementById('btnFullscreen');
+    const refreshMsSel = document.getElementById('refreshMs');
 
     const triageQueue = document.getElementById('triageQueue');
     const eventsEl = document.getElementById('events');
@@ -448,7 +459,9 @@ def _dashboard_html() -> str:
     let alertsCache = [];
     let openCache = [];
     let soundOn = false;
+    let openOnly = false;
     let lastCriticalTs = 0;
+    let refreshTimerId = null;
 
     function fmtTs(ts) {
       if (!ts) return '-';
@@ -518,11 +531,19 @@ def _dashboard_html() -> str:
     }
 
     function renderEvents() {
-      if (!alertsCache.length) {
+      let rows = alertsCache;
+      if (openOnly) {
+        rows = alertsCache.filter(a => {
+          const e = a.event || {};
+          const lvl = e.risk_level || 'LOW';
+          return !a.acknowledged && rank[lvl] >= rank.HIGH;
+        });
+      }
+      if (!rows.length) {
         eventsEl.innerHTML = '<div class=\"empty\">No events yet.</div>';
         return;
       }
-      eventsEl.innerHTML = alertsCache.slice().reverse().map((a) => cardTemplate(a, true)).join('');
+      eventsEl.innerHTML = rows.slice().reverse().map((a) => cardTemplate(a, true)).join('');
     }
 
     function updateFeed() {
@@ -608,11 +629,27 @@ def _dashboard_html() -> str:
       lastUpdate.textContent = new Date().toLocaleTimeString();
     }
 
+    function resetAutoRefresh() {
+      if (refreshTimerId !== null) {
+        clearInterval(refreshTimerId);
+      }
+      const ms = Math.max(700, Number(refreshMsSel.value || 3000));
+      refreshTimerId = setInterval(async () => {
+        await refreshAll();
+      }, ms);
+    }
+
     btnRefresh.addEventListener('click', refreshAll);
+    btnOpenOnly.addEventListener('click', () => {
+      openOnly = !openOnly;
+      btnOpenOnly.textContent = `Open Only: ${openOnly ? 'On' : 'Off'}`;
+      renderEvents();
+    });
     btnSound.addEventListener('click', () => {
       soundOn = !soundOn;
       btnSound.textContent = `Alert Sound: ${soundOn ? 'On' : 'Off'}`;
     });
+    refreshMsSel.addEventListener('change', resetAutoRefresh);
     btnFullscreen.addEventListener('click', async () => {
       const feed = document.querySelector('.feed');
       if (feed && feed.requestFullscreen) {
@@ -638,7 +675,7 @@ def _dashboard_html() -> str:
       });
 
       setInterval(refreshStreams, 5000);
-      setInterval(refreshAll, 3000);
+      resetAutoRefresh();
     }
 
     boot();

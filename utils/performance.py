@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -32,17 +33,26 @@ class ModuleLatency:
     calls: int = 0
     total_ms: float = 0.0
     max_ms: float = 0.0
+    recent_ms: deque[float] = field(default_factory=lambda: deque(maxlen=512))
 
     def update(self, elapsed_ms: float) -> None:
         self.calls += 1
         self.total_ms += elapsed_ms
         self.max_ms = max(self.max_ms, elapsed_ms)
+        self.recent_ms.append(elapsed_ms)
 
     @property
     def avg_ms(self) -> float:
         if self.calls == 0:
             return 0.0
         return self.total_ms / self.calls
+
+    def percentile_ms(self, percentile: float) -> float:
+        if not self.recent_ms:
+            return 0.0
+        values = sorted(self.recent_ms)
+        index = int((len(values) - 1) * max(0.0, min(percentile, 100.0)) / 100.0)
+        return float(values[index])
 
 
 class PerformanceTracker:
@@ -62,6 +72,9 @@ class PerformanceTracker:
         for name, metric in self._latencies.items():
             data[name] = {
                 "avg_ms": round(metric.avg_ms, 3),
+                "p50_ms": round(metric.percentile_ms(50), 3),
+                "p95_ms": round(metric.percentile_ms(95), 3),
+                "p99_ms": round(metric.percentile_ms(99), 3),
                 "max_ms": round(metric.max_ms, 3),
                 "calls": metric.calls,
             }

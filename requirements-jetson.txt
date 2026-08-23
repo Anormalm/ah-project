@@ -1,0 +1,15 @@
+# JetPack supplies CUDA, TensorRT, cuDNN, PyTorch, torchvision and OpenCV.
+# Do not add opencv-python, torch, torchvision or tensorrt here: pip wheels can
+# replace NVIDIA's accelerated aarch64 packages.
+numpy==1.26.4
+scipy==1.13.1
+pydantic==2.12.5
+PyYAML==6.0.2
+fastapi==0.115.14
+uvicorn==0.34.3
+psutil==6.1.1
+matplotlib==3.9.4
+pillow==11.1.0
+requests==2.32.4
+polars==1.31.0
+ultralytics-thop==2.0.14

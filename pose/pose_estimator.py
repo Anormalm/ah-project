@@ -66,24 +66,45 @@ class MockPoseEngine(InferenceEngine):
 
 
 class UltralyticsPoseEngine(InferenceEngine):
-    def __init__(self, model_path: str, device: str = "cpu", min_match_iou: float = 0.1, input_size: int = 256) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        device: str = "cpu",
+        min_match_iou: float = 0.1,
+        input_size: int | tuple[int, int] | list[int] = 256,
+        conf_threshold: float = 0.25,
+        allow_cpu_fallback: bool = False,
+    ) -> None:
         try:
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError("ultralytics package is required for ultralytics pose backend") from exc
         self._model = YOLO(model_path)
+        self.model_path = model_path
         self._device = device
         self.min_match_iou = min_match_iou
         self.input_size = input_size
+        self.conf_threshold = float(conf_threshold)
+        self.allow_cpu_fallback = bool(allow_cpu_fallback)
+        self._is_tensorrt = str(model_path).lower().endswith(".engine")
 
     def _infer(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        kwargs = {
+            "device": self._device,
+            "imgsz": self.input_size,
+            "conf": self.conf_threshold,
+            "verbose": False,
+            "rect": False,
+        }
         try:
-            result = self._model.predict(frame, device=self._device, imgsz=self.input_size, verbose=False)[0]
+            result = self._model.predict(frame, **kwargs)[0]
         except Exception as exc:
             message = str(exc).lower()
-            if self._device != "cpu" and "torchvision::nms" in message:
+            can_fallback = self.allow_cpu_fallback and not self._is_tensorrt and self._device != "cpu"
+            if can_fallback and ("torchvision::nms" in message or "cuda" in message):
                 self._device = "cpu"
-                result = self._model.predict(frame, device=self._device, imgsz=self.input_size, verbose=False)[0]
+                kwargs["device"] = "cpu"
+                result = self._model.predict(frame, **kwargs)[0]
             else:
                 raise
         if result.boxes is None or result.keypoints is None:
@@ -100,6 +121,13 @@ class UltralyticsPoseEngine(InferenceEngine):
             ones = np.ones((pose_kpts.shape[0], pose_kpts.shape[1], 1), dtype=np.float32)
             pose_kpts = np.concatenate([pose_kpts, ones], axis=2)
         return pose_boxes, pose_kpts, pose_conf
+
+    def warmup(self) -> None:
+        if isinstance(self.input_size, (tuple, list)):
+            height, width = self.input_size
+        else:
+            height = width = int(self.input_size)
+        self._infer(np.zeros((height, width, 3), dtype=np.uint8))
 
     def predict(self, inputs: tuple[np.ndarray, list[tuple[float, float, float, float]]]) -> list[np.ndarray]:
         frame, bboxes = inputs
@@ -280,9 +308,18 @@ class PoseEstimator:
         self.backend = backend
 
     @staticmethod
-    def _to_pose_result(bbox: tuple[float, float, float, float], kpts: np.ndarray) -> PoseResult:
+    def _to_pose_result(
+        bbox: tuple[float, float, float, float],
+        kpts: np.ndarray,
+        confidence: float | None = None,
+    ) -> PoseResult:
         tuples = [(float(x), float(y), float(c)) for x, y, c in kpts]
-        return PoseResult(bbox=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])), keypoints=tuples)
+        score = float(np.mean(kpts[:, 2])) if confidence is None and kpts.size else float(confidence or 0.0)
+        return PoseResult(
+            bbox=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])),
+            keypoints=tuples,
+            confidence=max(0.0, min(1.0, score)),
+        )
 
     def predict(self, frame: np.ndarray, bboxes: list[tuple[float, float, float, float]]) -> list[PoseResult]:
         if not bboxes:
@@ -294,7 +331,7 @@ class PoseEstimator:
         method = getattr(self.backend, "predict_full", None)
         if callable(method):
             raw: list[tuple[tuple[float, float, float, float], np.ndarray, float]] = method(frame)
-            return [self._to_pose_result(bbox, kpts) for bbox, kpts, _ in raw]
+            return [self._to_pose_result(bbox, kpts, confidence) for bbox, kpts, confidence in raw]
 
         h, w = frame.shape[:2]
         return self.predict(frame, [(0.0, 0.0, float(w - 1), float(h - 1))])

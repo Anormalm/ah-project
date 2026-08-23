@@ -28,6 +28,7 @@ class ByteTrackLikeTracker:
         self.max_misses = max_misses
         self._next_id = 1
         self._tracks: dict[int, _TrackState] = {}
+        self.last_removed_track_ids: list[int] = []
 
     @staticmethod
     def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
@@ -83,6 +84,7 @@ class ByteTrackLikeTracker:
         return matches, sorted(unmatched_tracks), sorted(unmatched_dets)
 
     def update(self, detections: list[Detection], poses: list[PoseResult], timestamp: float) -> list[TrackPose]:
+        self.last_removed_track_ids = []
         pose_by_bbox = {pose.bbox: pose for pose in poses}
         track_ids = list(self._tracks.keys())
         matches, unmatched_track_idx, unmatched_det_idx = self._match(detections)
@@ -122,6 +124,7 @@ class ByteTrackLikeTracker:
         stale_ids = [tid for tid, state in self._tracks.items() if state.misses > self.max_misses]
         for tid in stale_ids:
             del self._tracks[tid]
+        self.last_removed_track_ids = stale_ids
 
         return results
 

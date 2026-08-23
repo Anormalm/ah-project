@@ -5,22 +5,30 @@ import threading
 from pathlib import Path
 
 from utils.schemas import FeatureVector, RiskEvent
+from utils.async_jsonl import BoundedJSONLWriter
 
 
 class TrainingDataLogger:
-    _locks: dict[str, threading.Lock] = {}
-    _locks_guard = threading.Lock()
+    _registry_lock = threading.Lock()
+    _writers: dict[str, tuple[BoundedJSONLWriter, int]] = {}
 
-    def __init__(self, path: str | None) -> None:
+    def __init__(self, path: str | None, queue_size: int = 4096, batch_size: int = 128) -> None:
         self.path = Path(path) if path else None
-        self._lock: threading.Lock | None = None
+        self._writer: BoundedJSONLWriter | None = None
+        self._registry_key: str | None = None
+        self._closed = False
         if self.path is not None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
             key = str(self.path.resolve())
-            with self._locks_guard:
-                if key not in self._locks:
-                    self._locks[key] = threading.Lock()
-                self._lock = self._locks[key]
+            with self._registry_lock:
+                entry = self._writers.get(key)
+                if entry is None:
+                    writer = BoundedJSONLWriter(self.path, queue_size=queue_size, batch_size=batch_size)
+                    self._writers[key] = (writer, 1)
+                else:
+                    writer, refs = entry
+                    self._writers[key] = (writer, refs + 1)
+                self._writer = writer
+                self._registry_key = key
 
     def emit(self, stream_id: str, feature: FeatureVector, event: RiskEvent) -> None:
         if self.path is None:
@@ -40,9 +48,25 @@ class TrainingDataLogger:
             "label": 1 if event.risk_level in {"HIGH", "CRITICAL"} else 0,
         }
         line = json.dumps(payload, separators=(",", ":"))
-        lock = self._lock
-        if lock is None:
+        if self._writer is None:
             return
-        with lock:
-            with self.path.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        self._writer.write(line)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        key = self._registry_key
+        writer_to_close: BoundedJSONLWriter | None = None
+        if key is not None:
+            with self._registry_lock:
+                entry = self._writers.get(key)
+                if entry is not None:
+                    writer, refs = entry
+                    if refs <= 1:
+                        self._writers.pop(key, None)
+                        writer_to_close = writer
+                    else:
+                        self._writers[key] = (writer, refs - 1)
+        if writer_to_close is not None:
+            writer_to_close.close()

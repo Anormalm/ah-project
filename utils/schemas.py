@@ -40,6 +40,7 @@ class FeatureVector(BaseModel):
     posture: Literal["lying", "sitting", "standing", "unknown"]
     bed_zone_distance: float
     lean_angle: float
+    pose_quality: float = Field(default=1.0, ge=0.0, le=1.0)
     normalized_keypoints: list[tuple[float, float, float]] = Field(default_factory=list)
 
     model_config = ConfigDict(frozen=True)
@@ -65,4 +66,3 @@ class RiskEvent(BaseModel):
 class AlertRecord(BaseModel):
     stream_id: str
     event: RiskEvent
-

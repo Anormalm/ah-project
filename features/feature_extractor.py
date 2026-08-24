@@ -25,15 +25,29 @@ class _PrevState:
 
 
 class FeatureExtractor:
-    def __init__(self, bed_zones: list[tuple[float, float, float, float]] | None = None, min_kpt_conf: float = 0.2) -> None:
+    def __init__(
+        self,
+        bed_zones: list[tuple[float, float, float, float]] | None = None,
+        min_kpt_conf: float = 0.2,
+        center_ema_alpha: float = 0.35,
+    ) -> None:
         self.bed_zones = bed_zones or []
         self.min_kpt_conf = min_kpt_conf
+        self.center_ema_alpha = float(np.clip(center_ema_alpha, 0.05, 1.0))
         self._prev: dict[int, _PrevState] = {}
 
     def remove_track(self, track_id: int) -> None:
         self._prev.pop(int(track_id), None)
 
     def _center_of_mass(self, keypoints: np.ndarray) -> tuple[float, float]:
+        # Motion must not jump when low-confidence face/ankle/wrist points appear
+        # or disappear. Prefer the torso, which is both stable and relevant to
+        # vertical fall motion, then fall back to all visible landmarks.
+        torso_indices = [idx for idx in (5, 6, 11, 12) if idx < keypoints.shape[0]]
+        torso = keypoints[torso_indices]
+        torso = torso[torso[:, 2] >= self.min_kpt_conf]
+        if torso.shape[0] >= 2:
+            return (float(torso[:, 0].mean()), float(torso[:, 1].mean()))
         valid = keypoints[keypoints[:, 2] >= self.min_kpt_conf]
         if valid.size == 0:
             return (0.0, 0.0)
@@ -113,24 +127,46 @@ class FeatureExtractor:
         normalized[~visible, :2] = 0.0
         return [tuple(float(v) for v in point) for point in normalized]
 
-    def _kinematics(self, track_id: int, center: tuple[float, float], timestamp: float) -> tuple[tuple[float, float], tuple[float, float]]:
+    def _pose_quality(self, keypoints: np.ndarray) -> float:
+        if keypoints.ndim != 2 or keypoints.shape[0] == 0 or keypoints.shape[1] < 3:
+            return 0.0
+        confidence = np.clip(keypoints[:, 2], 0.0, 1.0)
+        visible = confidence >= self.min_kpt_conf
+        if not np.any(visible):
+            return 0.0
+        # Penalize fragments even when their few remaining joints are confident.
+        visible_ratio = float(np.mean(visible))
+        visible_confidence = float(np.mean(confidence[visible]))
+        return float(np.clip(visible_ratio * visible_confidence, 0.0, 1.0))
+
+    def _kinematics(
+        self,
+        track_id: int,
+        center: tuple[float, float],
+        timestamp: float,
+    ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
         prev = self._prev.get(track_id)
         if prev is None:
             self._prev[track_id] = _PrevState(center=center, velocity=(0.0, 0.0), timestamp=timestamp)
-            return (0.0, 0.0), (0.0, 0.0)
+            return center, (0.0, 0.0), (0.0, 0.0)
 
-        dt = max(timestamp - prev.timestamp, 1e-6)
-        vx = (center[0] - prev.center[0]) / dt
-        vy = (center[1] - prev.center[1]) / dt
+        alpha = self.center_ema_alpha
+        smoothed = (
+            alpha * center[0] + (1.0 - alpha) * prev.center[0],
+            alpha * center[1] + (1.0 - alpha) * prev.center[1],
+        )
+        dt = max(timestamp - prev.timestamp, 1.0 / 120.0)
+        vx = (smoothed[0] - prev.center[0]) / dt
+        vy = (smoothed[1] - prev.center[1]) / dt
         ax = (vx - prev.velocity[0]) / dt
         ay = (vy - prev.velocity[1]) / dt
-        self._prev[track_id] = _PrevState(center=center, velocity=(float(vx), float(vy)), timestamp=timestamp)
-        return (float(vx), float(vy)), (float(ax), float(ay))
+        self._prev[track_id] = _PrevState(center=smoothed, velocity=(float(vx), float(vy)), timestamp=timestamp)
+        return smoothed, (float(vx), float(vy)), (float(ax), float(ay))
 
     def extract(self, track_pose: TrackPose) -> FeatureVector:
         keypoints = np.array(track_pose.keypoints, dtype=np.float32)
-        center = self._center_of_mass(keypoints)
-        velocity, acceleration = self._kinematics(track_pose.track_id, center, track_pose.timestamp)
+        raw_center = self._center_of_mass(keypoints)
+        center, velocity, acceleration = self._kinematics(track_pose.track_id, raw_center, track_pose.timestamp)
         joint_angles, lean_angle = self._joint_angles(keypoints)
         posture = self._posture(keypoints, joint_angles)
 
@@ -149,6 +185,6 @@ class FeatureExtractor:
             posture=posture,
             bed_zone_distance=float(bed_dist),
             lean_angle=float(lean_angle),
+            pose_quality=self._pose_quality(keypoints),
             normalized_keypoints=self._normalize_keypoints(keypoints),
         )
-

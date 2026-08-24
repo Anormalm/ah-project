@@ -73,6 +73,37 @@ def test_skeleton_normalization_is_translation_and_scale_invariant() -> None:
     )
 
 
+def test_motion_center_ignores_peripheral_visibility_changes() -> None:
+    keypoints = np.asarray(_pose((10.0, 20.0, 110.0, 220.0)).keypoints, dtype=np.float32)
+    changed = keypoints.copy()
+    # Face, wrists, knees and ankles can flicker at frame edges; torso stays put.
+    for idx in (0, 1, 2, 3, 4, 7, 8, 13, 14, 15, 16):
+        changed[idx, :2] += np.array([150.0, 120.0], dtype=np.float32)
+        changed[idx, 2] = 0.0
+
+    extractor = FeatureExtractor(min_kpt_conf=0.2, center_ema_alpha=1.0)
+    first = extractor.extract(TrackPose(track_id=9, keypoints=[tuple(row) for row in keypoints], timestamp=1.0))
+    second = extractor.extract(TrackPose(track_id=9, keypoints=[tuple(row) for row in changed], timestamp=1.04))
+
+    assert np.allclose(first.center_of_mass, second.center_of_mass, atol=1e-5)
+    assert np.allclose(second.velocity, (0.0, 0.0), atol=1e-5)
+
+
+def test_pose_quality_penalizes_skeleton_fragments() -> None:
+    full = np.asarray(_pose((10.0, 20.0, 110.0, 220.0), confidence=0.9).keypoints, dtype=np.float32)
+    fragment = full.copy()
+    fragment[7:, 2] = 0.0
+    extractor = FeatureExtractor(min_kpt_conf=0.25)
+
+    full_feature = extractor.extract(TrackPose(track_id=11, keypoints=[tuple(row) for row in full], timestamp=1.0))
+    fragment_feature = extractor.extract(
+        TrackPose(track_id=12, keypoints=[tuple(row) for row in fragment], timestamp=1.0)
+    )
+
+    assert full_feature.pose_quality > 0.8
+    assert fragment_feature.pose_quality < 0.4
+
+
 def test_skeleton_training_loader_and_weak_label_weight(tmp_path: Path) -> None:
     path = tmp_path / "skeleton.jsonl"
     rows = []

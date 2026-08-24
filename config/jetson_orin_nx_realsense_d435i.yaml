@@ -17,5 +17,15 @@ ingestion:
     # Camera IMU is disabled initially; it measures camera motion, not patients.
     enable_imu: false
 
+features:
+  # Torso-center smoothing protects pixel derivatives from keypoint jitter at
+  # the D435i's 30 FPS capture rate while retaining fast fall motion.
+  center_ema_alpha: 0.25
+
+rules:
+  # Reject fragmentary skeletons as a fall source when a person crosses the
+  # near/right image boundary. Full-body standing poses currently score >0.7.
+  fall_min_pose_quality: 0.55
+
 output:
   json_log_path: output/alerts_jetson_d435i.jsonl

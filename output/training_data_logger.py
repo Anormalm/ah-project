@@ -47,6 +47,7 @@ class TrainingDataLogger:
             "acc": acc,
             "lean": float(feature.lean_angle),
             "posture": feature.posture,
+            "pose_quality": float(feature.pose_quality),
             "normalized_keypoints": feature.normalized_keypoints,
             "risk_level": event.risk_level,
             "label": 1 if event.risk_level in {"HIGH", "CRITICAL"} else 0,

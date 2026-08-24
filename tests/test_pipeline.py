@@ -8,6 +8,7 @@ from detection.yolo_detector import MockDetectionEngine, YOLOPersonDetector
 from pose.pose_estimator import MockPoseEngine, PoseEstimator
 from risk.risk_scoring import RiskScorer
 from temporal.temporal_model import TemporalRiskModel
+from temporal.rule_engine import RuleEngine
 from tracking.tracker import ByteTrackLikeTracker
 from utils.schemas import Detection, FeatureVector, RuleDecision
 
@@ -157,3 +158,69 @@ def test_risk_requires_consecutive_high_frames() -> None:
     assert e2.risk_level == "LOW"
     assert e3.risk_level == "HIGH"
 
+
+def test_single_fall_frame_does_not_bypass_critical_guard() -> None:
+    t0 = time.time()
+    scorer = RiskScorer(
+        ml_weight=0.0,
+        ema_alpha=1.0,
+        allow_ml_level_override=False,
+        high_consecutive_frames=4,
+        critical_consecutive_frames=2,
+    )
+    fall = RuleDecision(
+        track_id=31,
+        timestamp=t0,
+        rule_score=0.96,
+        rule_level="CRITICAL",
+        reasons=["sudden_vertical_drop"],
+    )
+    stable = RuleDecision(track_id=31, timestamp=t0 + 0.04, rule_score=0.1, rule_level="LOW", reasons=[])
+
+    first = scorer.score(fall, ml_probability=0.0)
+    second = scorer.score(stable, ml_probability=0.0)
+
+    assert first.risk_level == "LOW"
+    assert first.event == "stable"
+    assert second.risk_level == "LOW"
+
+
+def test_acceleration_without_downward_speed_is_not_a_fall() -> None:
+    engine = RuleEngine(sudden_drop_vy=220.0, sudden_drop_ay=1100.0)
+    feature = FeatureVector(
+        track_id=44,
+        timestamp=1.0,
+        center_of_mass=(100.0, 100.0),
+        velocity=(0.0, 30.0),
+        acceleration=(0.0, 4000.0),
+        joint_angles={},
+        posture="standing",
+        bed_zone_distance=1e6,
+        lean_angle=0.0,
+    )
+
+    decision = engine.evaluate(feature)
+
+    assert decision.rule_level == "LOW"
+    assert "sudden_vertical_drop" not in decision.reasons
+
+
+def test_partial_pose_cannot_trigger_fall() -> None:
+    engine = RuleEngine(sudden_drop_vy=220.0, fall_min_pose_quality=0.55)
+    feature = FeatureVector(
+        track_id=45,
+        timestamp=1.0,
+        center_of_mass=(100.0, 180.0),
+        velocity=(0.0, 500.0),
+        acceleration=(0.0, 5000.0),
+        joint_angles={},
+        posture="standing",
+        bed_zone_distance=1e6,
+        lean_angle=0.0,
+        pose_quality=0.3,
+    )
+
+    decision = engine.evaluate(feature)
+
+    assert decision.rule_level == "LOW"
+    assert "sudden_vertical_drop" not in decision.reasons

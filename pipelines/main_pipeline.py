@@ -96,6 +96,7 @@ class RiskDetectionPipeline:
         self.feature_extractor = FeatureExtractor(
             bed_zones=bed_zones,
             min_kpt_conf=cfg["features"]["min_keypoint_conf"],
+            center_ema_alpha=float(cfg["features"].get("center_ema_alpha", 0.35)),
         )
 
         self.rule_engine = RuleEngine(**cfg["rules"])

@@ -26,6 +26,7 @@ class RuleEngine:
         sitting_edge_seconds: float = 5.0,
         sudden_drop_vy: float = 250.0,
         sudden_drop_ay: float = 1200.0,
+        fall_min_pose_quality: float = 0.45,
         lean_angle_deg: float = 30.0,
         lean_std_deg: float = 8.0,
         inactivity_speed_px_s: float = 8.0,
@@ -42,6 +43,7 @@ class RuleEngine:
         self.sitting_edge_seconds = sitting_edge_seconds
         self.sudden_drop_vy = sudden_drop_vy
         self.sudden_drop_ay = sudden_drop_ay
+        self.fall_min_pose_quality = float(np.clip(fall_min_pose_quality, 0.0, 1.0))
         self.lean_angle_deg = lean_angle_deg
         self.lean_std_deg = lean_std_deg
         self.inactivity_speed_px_s = inactivity_speed_px_s
@@ -83,7 +85,10 @@ class RuleEngine:
 
         vy = feature.velocity[1]
         ay = feature.acceleration[1]
-        if self.enable_fall_rule and (vy >= self.sudden_drop_vy or ay >= self.sudden_drop_ay):
+        # Acceleration from frame-to-frame pose estimates is noisy and must not
+        # independently declare a fall. Require sustained downward torso speed;
+        # acceleration remains useful corroborating evidence.
+        if self.enable_fall_rule and feature.pose_quality >= self.fall_min_pose_quality and vy >= self.sudden_drop_vy:
             level = self._elevate(level, "CRITICAL")
             score = max(score, 0.96)
             reasons.append("sudden_vertical_drop")
@@ -130,4 +135,3 @@ class RuleEngine:
             rule_level=level,
             reasons=reasons,
         )
-

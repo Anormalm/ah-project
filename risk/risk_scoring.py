@@ -56,7 +56,7 @@ class RiskScorer:
 
     @staticmethod
     def _event_type(level: str, reasons: list[str]) -> str:
-        if "sudden_vertical_drop" in reasons or level == "CRITICAL":
+        if level == "CRITICAL":
             return "fall_detected"
         if "lean_instability" in reasons or "repeated_sit_stand_transitions" in reasons or level == "HIGH":
             return "instability_risk"
@@ -109,30 +109,36 @@ class RiskScorer:
         if self.allow_ml_level_override and self._rank[ml_level] > self._rank[raw_level]:
             raw_level = ml_level
 
+        previous = self._state.get(rule_decision.track_id)
+        previous_emitted = previous.emitted_level if previous is not None else "LOW"
+
         confidence, final_level = self._stabilize(rule_decision.track_id, fused, raw_level, rule_decision.timestamp)
 
         reasons = list(rule_decision.reasons)
         if ml_probability >= self.high_threshold:
-            reasons.append("ml_high_probability")
+            reasons.append("temporal_high_probability")
 
         state = self._state[rule_decision.track_id]
-        if final_level in {"HIGH", "CRITICAL"}:
+        # Count the current unsmoothed evidence. A prior transient CRITICAL held
+        # by downgrade grace must not manufacture consecutive critical frames.
+        if raw_level in {"HIGH", "CRITICAL"}:
             state.high_run += 1
         else:
             state.high_run = 0
-        if final_level == "CRITICAL":
+        if raw_level == "CRITICAL":
             state.critical_run += 1
         else:
             state.critical_run = 0
 
-        prev_emitted = state.emitted_level
-        protected_fall = "sudden_vertical_drop" in reasons
         guarded_level = final_level
-        if not protected_fall:
-            if guarded_level == "CRITICAL" and state.critical_run < self.critical_consecutive_frames:
-                guarded_level = prev_emitted if self._rank[prev_emitted] >= self._rank["HIGH"] else "HIGH"
-            if guarded_level == "HIGH" and state.high_run < self.high_consecutive_frames:
-                guarded_level = prev_emitted
+        if guarded_level == "CRITICAL":
+            critical_confirmed = state.critical_run >= self.critical_consecutive_frames
+            if not critical_confirmed and previous_emitted != "CRITICAL":
+                guarded_level = previous_emitted
+        elif guarded_level == "HIGH":
+            high_confirmed = state.high_run >= self.high_consecutive_frames
+            if not high_confirmed and self._rank[previous_emitted] < self._rank["HIGH"]:
+                guarded_level = previous_emitted
         state.emitted_level = guarded_level
 
         return RiskEvent(
@@ -143,4 +149,3 @@ class RiskScorer:
             event=self._event_type(guarded_level, reasons),
             reasons=reasons,
         )
-

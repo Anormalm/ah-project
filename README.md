@@ -254,6 +254,7 @@ Recommended JetPack 6 bring-up:
 cd /opt/ah-project
 chmod +x scripts/setup_jetson.sh
 ./scripts/setup_jetson.sh
+source scripts/activate_jetson_env.sh
 
 # Download YOLO26 pose checkpoints, then build both target-specific candidates.
 .venv-jetson/bin/python scripts/download_models.py
@@ -339,3 +340,12 @@ python run.py --config config/jetson_orin_nx_realsense_d435i.yaml
 
 For multiple connected cameras, replace `source: auto` with the D435i serial.
 Keep the camera IMU disabled for the initial fixed-mount deployment.
+
+On the validated JetPack 6.2.1 setup, activate the environment before export or
+runtime so NVIDIA's cuSPARSELt library is discoverable:
+
+```bash
+source scripts/activate_jetson_env.sh
+python scripts/verify_jetson_runtime.py --config config/jetson_orin_nx_sota.yaml
+python run.py --config config/jetson_orin_nx_realsense_d435i.yaml
+```

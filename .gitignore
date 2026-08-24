@@ -11,3 +11,4 @@ models/*.onnx
 models/*.engine
 models/*.engine.json
 models/*.cache
+/yolo*.pt

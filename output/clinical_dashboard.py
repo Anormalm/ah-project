@@ -129,195 +129,190 @@ def _dashboard_html() -> str:
 <head>
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>Clinical Risk Command Center</title>
+  <title>Risk monitor</title>
   <style>
     :root {
-      --bg: #eef3f7;
+      --bg: #f3f4f6;
       --panel: #ffffff;
-      --ink: #1f2933;
-      --muted: #52606d;
-      --line: #d9e2ec;
-      --accent: #0b7285;
-      --low: #2f9e44;
-      --med: #f08c00;
-      --high: #d9480f;
-      --critical: #c92a2a;
-      --shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+      --ink: #202124;
+      --muted: #687076;
+      --line: #d5d8dc;
+      --accent: #1769aa;
+      --low: #2e7d32;
+      --med: #b26a00;
+      --high: #c14600;
+      --critical: #b3261e;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: \"Segoe UI\", \"Aptos\", \"Source Sans 3\", sans-serif;
-      background:
-        radial-gradient(circle at 12% 8%, #d6e6f0 0, transparent 32%),
-        radial-gradient(circle at 88% 92%, #d9efe3 0, transparent 26%),
-        var(--bg);
+      font-family: system-ui, -apple-system, \"Segoe UI\", sans-serif;
+      background: var(--bg);
       color: var(--ink);
+      font-size: 13px;
     }
     .shell {
-      max-width: 1380px;
+      max-width: 1440px;
       margin: 0 auto;
-      padding: 20px;
+      padding: 14px;
     }
     .topbar {
       display: flex;
       justify-content: space-between;
-      align-items: end;
+      align-items: center;
       gap: 10px;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }
     h1 {
       margin: 0;
-      font-size: 25px;
-      letter-spacing: .2px;
-    }
-    .subtitle {
-      margin-top: 4px;
-      color: var(--muted);
-      font-size: 13px;
+      font-size: 18px;
+      font-weight: 650;
     }
     .stamp {
       font-size: 12px;
       color: var(--muted);
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
-      padding: 7px 12px;
       white-space: nowrap;
     }
     .metrics {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-    .metric {
+      display: flex;
+      flex-wrap: wrap;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
-      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .metric {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      min-width: 125px;
+      padding: 7px 10px;
+      border-right: 1px solid var(--line);
     }
     .metric .k {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .7px;
+      font-size: 12px;
       color: var(--muted);
     }
     .metric .v {
-      margin-top: 4px;
-      font-size: 30px;
-      font-weight: 700;
+      font-size: 17px;
+      font-weight: 650;
       line-height: 1;
+    }
+    .toolbar {
+      display: flex;
+      align-items: end;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+      padding: 8px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+    .field { min-width: 130px; }
+    .toolbar-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-left: auto;
     }
     .layout {
       display: grid;
-      grid-template-columns: 340px 1fr;
-      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 8px;
+      align-items: start;
     }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
-      padding: 12px;
+      padding: 9px;
     }
     .panel h2 {
-      margin: 0 0 10px;
-      font-size: 15px;
-      letter-spacing: .2px;
+      margin: 0 0 7px;
+      font-size: 13px;
+      font-weight: 650;
     }
-    .stack { display: grid; gap: 12px; }
     label {
       display: block;
-      font-size: 12px;
+      font-size: 11px;
       color: var(--muted);
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
     select, button {
-      width: 100%;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 4px;
       background: #fff;
       color: var(--ink);
-      font-size: 13px;
-      padding: 8px;
+      font: inherit;
+      min-height: 30px;
+      padding: 5px 8px;
     }
+    select { width: 100%; }
     button {
       cursor: pointer;
-      font-weight: 600;
-      transition: .15s ease;
+      font-weight: 550;
     }
-    .btn-muted { background: #f8fafc; }
-    .btn-muted:hover { background: #f1f5f9; }
+    button:hover { background: #f1f3f4; }
+    .btn-muted { background: #fff; }
     .btn-accent {
       background: var(--accent);
       color: #fff;
-      border-color: transparent;
+      border-color: var(--accent);
     }
-    .btn-accent:hover { filter: brightness(.96); }
+    .btn-accent:hover { background: #12598f; }
     .btn-danger {
-      background: #ffe3e3;
-      border-color: #ffa8a8;
-      color: #a51111;
+      background: #fce8e6;
+      border-color: #e6aaa5;
+      color: #8c1d18;
     }
     .queue, .events {
       display: grid;
-      gap: 8px;
-      max-height: 36vh;
+      gap: 5px;
+      max-height: 42vh;
       overflow: auto;
-      padding-right: 2px;
     }
+    .queue { max-height: calc(100vh - 172px); }
     .event-card {
       border: 1px solid var(--line);
-      border-left: 5px solid var(--line);
-      border-radius: 10px;
+      border-left: 3px solid var(--line);
       background: #fff;
-      padding: 10px;
+      padding: 7px 8px;
     }
     .event-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 10px;
-      margin-bottom: 4px;
+      gap: 8px;
+      margin-bottom: 3px;
     }
-    .track { font-weight: 700; font-size: 14px; }
-    .stream { color: var(--muted); font-size: 12px; }
+    .track { font-weight: 650; }
+    .stream { color: var(--muted); font-size: 11px; }
     .meta {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 5px;
       color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 7px;
-    }
-    .row-actions {
-      display: flex;
-      gap: 8px;
-    }
-    .row-actions button { width: auto; padding: 6px 9px; font-size: 12px; }
-    .badge {
       font-size: 11px;
-      font-weight: 700;
-      color: #fff;
-      border-radius: 999px;
-      padding: 3px 8px;
+      margin-bottom: 4px;
+    }
+    .meta > span + span::before { content: "·"; margin-right: 5px; }
+    .row-actions { display: flex; gap: 5px; }
+    .row-actions button { min-height: 25px; padding: 3px 7px; font-size: 11px; }
+    .badge {
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .3px;
     }
     .LOW { border-left-color: var(--low); }
     .MEDIUM { border-left-color: var(--med); }
     .HIGH { border-left-color: var(--high); }
     .CRITICAL { border-left-color: var(--critical); }
-    .LOW .badge { background: var(--low); }
-    .MEDIUM .badge { background: var(--med); }
-    .HIGH .badge { background: var(--high); }
-    .CRITICAL .badge { background: var(--critical); }
-    .workspace { display: grid; gap: 12px; }
+    .LOW .badge { color: var(--low); }
+    .MEDIUM .badge { color: var(--med); }
+    .HIGH .badge { color: var(--high); }
+    .CRITICAL .badge { color: var(--critical); }
+    .workspace { display: grid; gap: 8px; }
     .feed {
       border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #111827;
+      background: #101214;
       overflow: hidden;
       aspect-ratio: 16 / 9;
       position: relative;
@@ -330,110 +325,101 @@ def _dashboard_html() -> str:
     }
     .feed-badge {
       position: absolute;
-      left: 10px;
-      bottom: 10px;
-      background: rgba(0,0,0,.55);
-      color: #eaf2ff;
-      border: 1px solid rgba(255,255,255,.22);
-      border-radius: 999px;
-      padding: 4px 8px;
-      font-size: 12px;
+      left: 7px;
+      bottom: 7px;
+      background: rgba(0,0,0,.65);
+      color: #fff;
+      padding: 3px 6px;
+      font-size: 11px;
     }
     .feed-actions {
       position: absolute;
-      right: 10px;
-      top: 10px;
+      right: 7px;
+      top: 7px;
       display: flex;
-      gap: 8px;
     }
     .feed-actions button {
-      width: auto;
       border-color: rgba(255,255,255,.28);
-      background: rgba(17,24,39,.62);
+      background: rgba(0,0,0,.6);
       color: #fff;
-      padding: 6px 8px;
-      font-size: 12px;
+      min-height: 27px;
+      padding: 3px 7px;
+      font-size: 11px;
     }
     .empty {
-      text-align: center;
       color: var(--muted);
-      border: 1px dashed var(--line);
-      border-radius: 10px;
-      padding: 30px 10px;
-      background: #fff;
-      font-size: 13px;
+      padding: 12px 4px;
+      font-size: 12px;
     }
     .ack {
       border-left-color: #94a3b8 !important;
       opacity: 0.78;
     }
     @media (max-width: 1060px) {
-      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .layout { grid-template-columns: 1fr; }
+      .queue { max-height: 42vh; }
+    }
+    @media (max-width: 680px) {
+      .shell { padding: 8px; }
+      .field { flex: 1 1 120px; }
+      .toolbar-actions { margin-left: 0; }
+      .metric { min-width: 50%; border-bottom: 1px solid var(--line); }
     }
   </style>
 </head>
 <body>
   <div class=\"shell\">
     <div class=\"topbar\">
-      <div>
-        <h1>Clinical Risk Command Center</h1>
-        <div class=\"subtitle\">Live stream triage with acknowledgement workflow and pose-based risk analytics.</div>
-      </div>
+      <h1>Risk monitor</h1>
       <div class=\"stamp\">Updated <span id=\"lastUpdate\">-</span></div>
     </div>
 
     <section class=\"metrics\">
-      <article class=\"metric\"><div class=\"k\">Active Streams</div><div id=\"mStreams\" class=\"v\">0</div></article>
-      <article class=\"metric\"><div class=\"k\">Active Tracks</div><div id=\"mTracks\" class=\"v\">0</div></article>
-      <article class=\"metric\"><div class=\"k\">Open High Priority</div><div id=\"mOpen\" class=\"v\">0</div></article>
-      <article class=\"metric\"><div class=\"k\">High Alerts</div><div id=\"mHigh\" class=\"v\">0</div></article>
-      <article class=\"metric\"><div class=\"k\">Critical Alerts</div><div id=\"mCritical\" class=\"v\">0</div></article>
+      <div class=\"metric\"><div class=\"k\">Streams</div><div id=\"mStreams\" class=\"v\">0</div></div>
+      <div class=\"metric\"><div class=\"k\">Tracks</div><div id=\"mTracks\" class=\"v\">0</div></div>
+      <div class=\"metric\"><div class=\"k\">Open</div><div id=\"mOpen\" class=\"v\">0</div></div>
+      <div class=\"metric\"><div class=\"k\">High</div><div id=\"mHigh\" class=\"v\">0</div></div>
+      <div class=\"metric\"><div class=\"k\">Critical</div><div id=\"mCritical\" class=\"v\">0</div></div>
+    </section>
+
+    <section class=\"toolbar\">
+      <div class=\"field\">
+        <label for=\"streamFilter\">Stream</label>
+        <select id=\"streamFilter\"><option value=\"\">All</option></select>
+      </div>
+      <div class=\"field\">
+        <label for=\"levelFilter\">Min severity</label>
+        <select id=\"levelFilter\">
+          <option value=\"LOW\">Low</option>
+          <option value=\"MEDIUM\">Medium</option>
+          <option value=\"HIGH\">High</option>
+          <option value=\"CRITICAL\">Critical</option>
+        </select>
+      </div>
+      <div class=\"field\">
+        <label for=\"refreshMs\">Refresh</label>
+        <select id=\"refreshMs\">
+          <option value=\"1000\">1s</option>
+          <option value=\"2000\">2s</option>
+          <option value=\"3000\" selected>3s</option>
+          <option value=\"5000\">5s</option>
+        </select>
+      </div>
+      <div class=\"toolbar-actions\">
+        <button id=\"btnOpenOnly\" class=\"btn-muted\">Open only: off</button>
+        <button id=\"btnSound\" class=\"btn-muted\">Sound: off</button>
+        <button id=\"btnPrivacy\" class=\"btn-muted\">Privacy: …</button>
+        <button id=\"btnRefresh\" class=\"btn-accent\">Refresh</button>
+      </div>
     </section>
 
     <section class=\"layout\">
-      <aside class=\"stack\">
-        <article class=\"panel\">
-          <h2>Controls</h2>
-          <label for=\"streamFilter\">Stream</label>
-          <select id=\"streamFilter\"><option value=\"\">All Streams</option></select>
-
-          <label for=\"levelFilter\">Minimum Severity</label>
-          <select id=\"levelFilter\">
-            <option value=\"LOW\">Low</option>
-            <option value=\"MEDIUM\">Medium</option>
-            <option value=\"HIGH\">High</option>
-            <option value=\"CRITICAL\">Critical</option>
-          </select>
-
-          <label for=\"refreshMs\">Refresh Interval</label>
-          <select id=\"refreshMs\">
-            <option value=\"1000\">1s</option>
-            <option value=\"2000\">2s</option>
-            <option value=\"3000\" selected>3s</option>
-            <option value=\"5000\">5s</option>
-          </select>
-
-          <div style=\"display:grid; gap:8px; margin-top:8px;\">
-            <button id=\"btnOpenOnly\" class=\"btn-muted\">Open Only: Off</button>
-            <button id=\"btnSound\" class=\"btn-muted\">Alert Sound: Off</button>
-            <button id=\"btnPrivacy\" class=\"btn-muted\">Privacy: Loading...</button>
-            <button id=\"btnRefresh\" class=\"btn-accent\">Refresh Now</button>
-          </div>
-        </article>
-
-        <article class=\"panel\">
-          <h2>Triage Queue (Open)</h2>
-          <div id=\"triageQueue\" class=\"queue\"></div>
-        </article>
-      </aside>
-
       <main class=\"workspace\">
         <article class=\"panel\">
-          <h2>Live Camera + Pose</h2>
+          <h2>Camera</h2>
           <div class=\"feed\">
             <img id=\"streamFeed\" alt=\"Live stream\" />
-            <div class=\"feed-badge\" id=\"streamState\">Waiting for stream...</div>
+            <div class=\"feed-badge\" id=\"streamState\">No stream</div>
             <div class=\"feed-actions\">
               <button id=\"btnFullscreen\">Fullscreen</button>
             </div>
@@ -441,10 +427,14 @@ def _dashboard_html() -> str:
         </article>
 
         <article class=\"panel\">
-          <h2>Recent Events</h2>
+          <h2>Events</h2>
           <div id=\"events\" class=\"events\"></div>
         </article>
       </main>
+      <aside class=\"panel\">
+        <h2>Open alerts</h2>
+        <div id=\"triageQueue\" class=\"queue\"></div>
+      </aside>
     </section>
   </div>
 
@@ -510,9 +500,9 @@ def _dashboard_html() -> str:
       const e = row.event || {};
       const level = e.risk_level || 'LOW';
       const eventName = e.event || 'stable';
-      const reasons = (e.reasons || []).length ? e.reasons.join(', ') : 'none';
+      const reasons = (e.reasons || []).length ? e.reasons.join(', ') : '—';
       const cls = `${level} ${row.acknowledged ? 'ack' : ''}`;
-      const ackLabel = row.acknowledged ? 'Unack' : 'Acknowledge';
+      const ackLabel = row.acknowledged ? 'Undo' : 'Ack';
       const sid = String(row.stream_id ?? '').replace(/'/g, "\\'");
       const action = showActions && rank[level] >= rank.HIGH
         ? `<button class=\"btn-muted\" onclick=\"window._ack('${sid}', ${e.track_id ?? -1}, ${row.acknowledged ? 'true' : 'false'})\">${ackLabel}</button>`
@@ -522,17 +512,17 @@ def _dashboard_html() -> str:
         <article class=\"event-card ${cls}\">
           <div class=\"event-head\">
             <div>
-              <div class=\"track\">Track #${e.track_id ?? '-'}</div>
-              <div class=\"stream\">${row.stream_id ?? 'unknown stream'}</div>
+              <div class=\"track\">Track ${e.track_id ?? '-'}</div>
+              <div class=\"stream\">${row.stream_id ?? '—'}</div>
             </div>
             <span class=\"badge\">${level}</span>
           </div>
           <div class=\"meta\">
-            <span>event: ${eventName}</span>
-            <span>confidence: ${(e.confidence ?? 0).toFixed(2)}</span>
-            <span>time: ${fmtTs(e.timestamp)}</span>
+            <span>${eventName}</span>
+            <span>${(e.confidence ?? 0).toFixed(2)}</span>
+            <span>${fmtTs(e.timestamp)}</span>
           </div>
-          <div class=\"meta\"><span>reason: ${reasons}</span></div>
+          <div class=\"meta\"><span>${reasons}</span></div>
           <div class=\"row-actions\">${action}</div>
         </article>
       `;
@@ -540,7 +530,7 @@ def _dashboard_html() -> str:
 
     function renderQueue() {
       if (!openCache.length) {
-        triageQueue.innerHTML = '<div class=\"empty\">No open high-priority alerts.</div>';
+        triageQueue.innerHTML = '<div class=\"empty\">Clear</div>';
         return;
       }
       triageQueue.innerHTML = openCache.map((a) => cardTemplate(a, true)).join('');
@@ -556,7 +546,7 @@ def _dashboard_html() -> str:
         });
       }
       if (!rows.length) {
-        eventsEl.innerHTML = '<div class=\"empty\">No events yet.</div>';
+        eventsEl.innerHTML = '<div class=\"empty\">No events</div>';
         return;
       }
       eventsEl.innerHTML = rows.slice().reverse().map((a) => cardTemplate(a, true)).join('');
@@ -566,11 +556,11 @@ def _dashboard_html() -> str:
       const sid = streamFilter.value;
       if (!sid) {
         streamFeed.removeAttribute('src');
-        streamState.textContent = 'Waiting for stream...';
+        streamState.textContent = 'No stream';
         return;
       }
       streamFeed.src = `/api/stream/${encodeURIComponent(sid)}.mjpg?fps=12&t=${Date.now()}`;
-      streamState.textContent = `Live: ${sid}`;
+      streamState.textContent = sid;
     }
 
     async function refreshStreams() {
@@ -579,7 +569,7 @@ def _dashboard_html() -> str:
         const data = await res.json();
         const streams = data.streams || [];
         const current = streamFilter.value;
-        streamFilter.innerHTML = '<option value="">All Streams</option>' + streams.map(s => `<option value="${s}">${s}</option>`).join('');
+        streamFilter.innerHTML = '<option value="">All</option>' + streams.map(s => `<option value="${s}">${s}</option>`).join('');
 
         if (streams.length === 0) {
           streamFilter.value = '';
@@ -608,7 +598,7 @@ def _dashboard_html() -> str:
       const sid = streamFilter.value;
       if (!sid) {
         btnPrivacy.disabled = true;
-        btnPrivacy.textContent = 'Privacy: No Stream';
+        btnPrivacy.textContent = 'Privacy: n/a';
         return;
       }
       try {
@@ -616,13 +606,13 @@ def _dashboard_html() -> str:
         const state = await res.json();
         privacyEnabled = Boolean(state.enabled);
         btnPrivacy.disabled = !state.toggle_allowed || state.configured_mode === 'none';
-        btnPrivacy.textContent = privacyEnabled ? `Privacy: On (${state.configured_mode})` : 'Privacy: OFF — DEBUG';
+        btnPrivacy.textContent = privacyEnabled ? 'Privacy: on' : 'Privacy: OFF';
         btnPrivacy.style.background = privacyEnabled ? '' : '#c92a2a';
         btnPrivacy.style.color = privacyEnabled ? '' : '#fff';
-        streamState.textContent = privacyEnabled ? `Live: ${sid}` : `Live: ${sid} · PRIVACY OFF`;
+        streamState.textContent = privacyEnabled ? sid : `${sid} · PRIVACY OFF`;
       } catch (_) {
         btnPrivacy.disabled = true;
-        btnPrivacy.textContent = 'Privacy: Unavailable';
+        btnPrivacy.textContent = 'Privacy: n/a';
       }
     }
 
@@ -630,7 +620,7 @@ def _dashboard_html() -> str:
       const sid = streamFilter.value;
       if (!sid) return;
       const next = !privacyEnabled;
-      if (!next && !window.confirm('Temporarily show identifiable video for local debugging? Privacy resets on restart.')) return;
+      if (!next && !window.confirm('Disable anonymization for this session?')) return;
       const res = await fetch(`/api/privacy/${encodeURIComponent(sid)}?enabled=${next}`, { method: 'POST' });
       if (res.ok) await refreshPrivacy();
     }
@@ -690,12 +680,12 @@ def _dashboard_html() -> str:
     btnRefresh.addEventListener('click', refreshAll);
     btnOpenOnly.addEventListener('click', () => {
       openOnly = !openOnly;
-      btnOpenOnly.textContent = `Open Only: ${openOnly ? 'On' : 'Off'}`;
+      btnOpenOnly.textContent = `Open only: ${openOnly ? 'on' : 'off'}`;
       renderEvents();
     });
     btnSound.addEventListener('click', () => {
       soundOn = !soundOn;
-      btnSound.textContent = `Alert Sound: ${soundOn ? 'On' : 'Off'}`;
+      btnSound.textContent = `Sound: ${soundOn ? 'on' : 'off'}`;
     });
     btnPrivacy.addEventListener('click', togglePrivacy);
     refreshMsSel.addEventListener('change', resetAutoRefresh);

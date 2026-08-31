@@ -156,8 +156,14 @@ class Visualizer:
         margin_y = 1.0 * h
         return self._clip_bbox(frame, (int(x1 - margin_x), int(y1 - margin_y), int(x2 + margin_x), int(y2 + margin_y)))
 
-    def _apply_privacy(self, frame: np.ndarray, detections: list[Detection], tracks: list[TrackPose]) -> np.ndarray:
-        mode = str(self.cfg.privacy_mode or "none").lower()
+    def _apply_privacy(
+        self,
+        frame: np.ndarray,
+        detections: list[Detection],
+        tracks: list[TrackPose],
+        privacy_mode_override: str | None = None,
+    ) -> np.ndarray:
+        mode = str(privacy_mode_override if privacy_mode_override is not None else self.cfg.privacy_mode or "none").lower()
         if mode in {"none", "off", "false"}:
             return frame.copy()
 
@@ -225,8 +231,9 @@ class Visualizer:
         risk_events: dict[int, RiskEvent],
         fps: float,
         bed_zones: list[tuple[float, float, float, float]] | None,
+        privacy_mode_override: str | None = None,
     ) -> np.ndarray:
-        canvas = self._apply_privacy(frame, detections, tracks)
+        canvas = self._apply_privacy(frame, detections, tracks, privacy_mode_override=privacy_mode_override)
 
         if self.cfg.show_bed_zones:
             for i, zone in enumerate(bed_zones or []):
@@ -293,6 +300,7 @@ class Visualizer:
         risk_events: dict[int, RiskEvent],
         fps: float,
         bed_zones: list[tuple[float, float, float, float]] | None = None,
+        privacy_mode_override: str | None = None,
     ) -> bool:
         canvas = self._compose_frame(
             frame=frame,
@@ -301,6 +309,7 @@ class Visualizer:
             risk_events=risk_events,
             fps=fps,
             bed_zones=bed_zones,
+            privacy_mode_override=privacy_mode_override,
         )
         self._last_output_frame = canvas
 

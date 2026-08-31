@@ -124,13 +124,14 @@ class RiskDetectionPipeline:
                 log_queue_size=int(writer_cfg.get("alert_queue_size", 2048)),
                 log_batch_size=int(writer_cfg.get("alert_batch_size", 64)),
                 frame_queue_size=int(writer_cfg.get("frame_queue_size", 2)),
+                allow_privacy_toggle=bool(alert_cfg.get("allow_privacy_toggle", False)),
             )
             self._owns_alert_manager = True
         else:
             self.alert_manager = alert_manager
             self._owns_alert_manager = False
-        self.alert_manager.register_stream(stream.stream_id)
         vis_cfg = VisualizationConfig(**alert_cfg.get("visualization", {}))
+        self.alert_manager.register_stream(stream.stream_id, privacy_mode=vis_cfg.privacy_mode)
         self.visualizer = Visualizer(stream_id=stream.stream_id, cfg=vis_cfg)
         self.training_logger = TrainingDataLogger(
             alert_cfg.get("training_log_path"),
@@ -470,6 +471,7 @@ class RiskDetectionPipeline:
                             risk_events=risk_events,
                             fps=fps,
                             bed_zones=self._bed_zones,
+                            privacy_mode_override=self.alert_manager.get_effective_privacy_mode(self.stream.stream_id),
                         )
                 else:
                     keep_running = True
@@ -535,6 +537,7 @@ class MultiStreamRunner:
             log_queue_size=int(writer_cfg.get("alert_queue_size", 2048)),
             log_batch_size=int(writer_cfg.get("alert_batch_size", 64)),
             frame_queue_size=int(writer_cfg.get("frame_queue_size", 2)),
+            allow_privacy_toggle=bool(output_cfg.get("allow_privacy_toggle", False)),
         )
         pipeline_cfg = PipelineConfig(**cfg["pipeline"])
         inference_backends = SharedInferenceBackends() if pipeline_cfg.share_inference_backends else None

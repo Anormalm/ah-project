@@ -29,3 +29,5 @@ rules:
 
 output:
   json_log_path: output/alerts_jetson_d435i.jsonl
+  # Local debugging only. The dashboard starts anonymized after every restart.
+  allow_privacy_toggle: true

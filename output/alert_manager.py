@@ -32,6 +32,7 @@ class AlertManager:
         log_queue_size: int = 2048,
         log_batch_size: int = 64,
         frame_queue_size: int = 2,
+        allow_privacy_toggle: bool = False,
     ) -> None:
         self.log_path = Path(json_log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +42,7 @@ class AlertManager:
         self.frame_jpeg_quality = max(30, min(int(frame_jpeg_quality), 95))
         self.dedupe_window_sec = max(0.0, float(dedupe_window_sec))
         self.emit_on_level_change_only = bool(emit_on_level_change_only)
+        self.allow_privacy_toggle = bool(allow_privacy_toggle)
         self.logger = setup_logger(name=logger_name)
         self._log_writer = BoundedJSONLWriter(
             self.log_path,
@@ -52,6 +54,7 @@ class AlertManager:
         self._frame_seq: dict[str, int] = {}
         self._stream_ids: set[str] = set()
         self._stream_health: dict[str, dict[str, Any]] = {}
+        self._stream_privacy: dict[str, dict[str, Any]] = {}
         self._acked_tracks: dict[tuple[str, int], dict[str, Any]] = {}
         self._last_track_level: dict[tuple[str, int], str] = {}
         self._last_emit_meta: dict[tuple[str, int], tuple[str, float]] = {}
@@ -77,10 +80,37 @@ class AlertManager:
             with self._start_lock:
                 self._start_api_server()
 
-    def register_stream(self, stream_id: str) -> None:
+    def register_stream(self, stream_id: str, privacy_mode: str | None = None) -> None:
         with self._lock:
             self._stream_ids.add(stream_id)
             self._stream_health.setdefault(stream_id, {"last_processed_ts": None, "fps": 0.0})
+            if privacy_mode is not None:
+                mode = str(privacy_mode or "none").lower()
+                self._stream_privacy[stream_id] = {
+                    "configured_mode": mode,
+                    "enabled": mode not in {"none", "off", "false"},
+                }
+
+    def get_privacy_status(self, stream_id: str) -> dict[str, Any]:
+        with self._lock:
+            state = dict(self._stream_privacy.get(stream_id, {"configured_mode": "none", "enabled": False}))
+        state["stream_id"] = stream_id
+        state["toggle_allowed"] = self.allow_privacy_toggle
+        state["effective_mode"] = state["configured_mode"] if state["enabled"] else "none"
+        return state
+
+    def set_privacy_enabled(self, stream_id: str, enabled: bool) -> dict[str, Any]:
+        if not self.allow_privacy_toggle:
+            raise PermissionError("Runtime privacy toggle is disabled by configuration")
+        with self._lock:
+            if stream_id not in self._stream_privacy:
+                raise KeyError(f"Unknown stream: {stream_id}")
+            configured = str(self._stream_privacy[stream_id]["configured_mode"])
+            self._stream_privacy[stream_id]["enabled"] = bool(enabled) and configured not in {"none", "off", "false"}
+        return self.get_privacy_status(stream_id)
+
+    def get_effective_privacy_mode(self, stream_id: str) -> str:
+        return str(self.get_privacy_status(stream_id)["effective_mode"])
 
     def update_stream_health(self, stream_id: str, fps: float, source) -> None:
         with self._lock:
@@ -302,4 +332,3 @@ class AlertManager:
                         break
             frame_thread.join(timeout=3.0)
         self._log_writer.close()
-

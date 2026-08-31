@@ -108,6 +108,20 @@ def test_alert_manager_health_tracks_safe_stream_metrics(tmp_path: Path) -> None
     assert health["streams"]["ward-a"]["reconnect_count"] == 1
 
 
+def test_runtime_privacy_toggle_is_explicit_and_resets_enabled(tmp_path: Path) -> None:
+    manager = AlertManager(str(tmp_path / "privacy.jsonl"), enable_api=False, allow_privacy_toggle=True)
+    manager.register_stream("ward-a", privacy_mode="person_pixelate")
+
+    initial = manager.get_privacy_status("ward-a")
+    disabled = manager.set_privacy_enabled("ward-a", False)
+    restored = manager.set_privacy_enabled("ward-a", True)
+    manager.close()
+
+    assert initial["effective_mode"] == "person_pixelate"
+    assert disabled["effective_mode"] == "none"
+    assert restored["effective_mode"] == "person_pixelate"
+
+
 def test_tracker_reports_ids_removed_after_misses() -> None:
     tracker = ByteTrackLikeTracker(iou_threshold=0.2, max_misses=0)
     estimator = PoseEstimator(MockPoseEngine())

@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 
@@ -55,6 +55,19 @@ def create_dashboard_app(alert_manager) -> FastAPI:
     @app.get("/api/streams")
     def streams() -> dict[str, list[str]]:
         return {"streams": alert_manager.get_stream_ids()}
+
+    @app.get("/api/privacy/{stream_id}")
+    def privacy_status(stream_id: str) -> dict[str, Any]:
+        return alert_manager.get_privacy_status(stream_id)
+
+    @app.post("/api/privacy/{stream_id}")
+    def set_privacy(stream_id: str, enabled: bool) -> dict[str, Any]:
+        try:
+            return alert_manager.set_privacy_enabled(stream_id, enabled)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/stream/{stream_id}.mjpg")
     def stream(stream_id: str, fps: int = 12) -> StreamingResponse:
@@ -404,6 +417,7 @@ def _dashboard_html() -> str:
           <div style=\"display:grid; gap:8px; margin-top:8px;\">
             <button id=\"btnOpenOnly\" class=\"btn-muted\">Open Only: Off</button>
             <button id=\"btnSound\" class=\"btn-muted\">Alert Sound: Off</button>
+            <button id=\"btnPrivacy\" class=\"btn-muted\">Privacy: Loading...</button>
             <button id=\"btnRefresh\" class=\"btn-accent\">Refresh Now</button>
           </div>
         </article>
@@ -450,6 +464,7 @@ def _dashboard_html() -> str:
     const btnRefresh = document.getElementById('btnRefresh');
     const btnOpenOnly = document.getElementById('btnOpenOnly');
     const btnSound = document.getElementById('btnSound');
+    const btnPrivacy = document.getElementById('btnPrivacy');
     const btnFullscreen = document.getElementById('btnFullscreen');
     const refreshMsSel = document.getElementById('refreshMs');
 
@@ -462,6 +477,7 @@ def _dashboard_html() -> str:
     let openOnly = false;
     let lastCriticalTs = 0;
     let refreshTimerId = null;
+    let privacyEnabled = true;
 
     function fmtTs(ts) {
       if (!ts) return '-';
@@ -588,6 +604,37 @@ def _dashboard_html() -> str:
       } catch (_) {}
     }
 
+    async function refreshPrivacy() {
+      const sid = streamFilter.value;
+      if (!sid) {
+        btnPrivacy.disabled = true;
+        btnPrivacy.textContent = 'Privacy: No Stream';
+        return;
+      }
+      try {
+        const res = await fetch(`/api/privacy/${encodeURIComponent(sid)}`);
+        const state = await res.json();
+        privacyEnabled = Boolean(state.enabled);
+        btnPrivacy.disabled = !state.toggle_allowed || state.configured_mode === 'none';
+        btnPrivacy.textContent = privacyEnabled ? `Privacy: On (${state.configured_mode})` : 'Privacy: OFF — DEBUG';
+        btnPrivacy.style.background = privacyEnabled ? '' : '#c92a2a';
+        btnPrivacy.style.color = privacyEnabled ? '' : '#fff';
+        streamState.textContent = privacyEnabled ? `Live: ${sid}` : `Live: ${sid} · PRIVACY OFF`;
+      } catch (_) {
+        btnPrivacy.disabled = true;
+        btnPrivacy.textContent = 'Privacy: Unavailable';
+      }
+    }
+
+    async function togglePrivacy() {
+      const sid = streamFilter.value;
+      if (!sid) return;
+      const next = !privacyEnabled;
+      if (!next && !window.confirm('Temporarily show identifiable video for local debugging? Privacy resets on restart.')) return;
+      const res = await fetch(`/api/privacy/${encodeURIComponent(sid)}?enabled=${next}`, { method: 'POST' });
+      if (res.ok) await refreshPrivacy();
+    }
+
     async function refreshAlerts() {
       try {
         const q = new URLSearchParams({ limit: '220' });
@@ -626,6 +673,7 @@ def _dashboard_html() -> str:
       await refreshSummary();
       await refreshAlerts();
       await refreshOpenQueue();
+      await refreshPrivacy();
       lastUpdate.textContent = new Date().toLocaleTimeString();
     }
 
@@ -649,6 +697,7 @@ def _dashboard_html() -> str:
       soundOn = !soundOn;
       btnSound.textContent = `Alert Sound: ${soundOn ? 'On' : 'Off'}`;
     });
+    btnPrivacy.addEventListener('click', togglePrivacy);
     refreshMsSel.addEventListener('change', resetAutoRefresh);
     btnFullscreen.addEventListener('click', async () => {
       const feed = document.querySelector('.feed');

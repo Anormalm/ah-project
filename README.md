@@ -340,6 +340,8 @@ python run.py --config config/jetson_orin_nx_realsense_d435i.yaml
 
 For multiple connected cameras, replace `source: auto` with the D435i serial.
 Keep the camera IMU disabled for the initial fixed-mount deployment.
+The local dashboard exposes a red `Privacy: OFF — DEBUG` toggle for this profile;
+anonymization always returns to `person_pixelate` when the process restarts.
 
 On the validated JetPack 6.2.1 setup, activate the environment before export or
 runtime so NVIDIA's cuSPARSELt library is discoverable:

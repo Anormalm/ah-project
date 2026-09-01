@@ -8,6 +8,7 @@ import numpy as np
 from ingestion.rtsp_stream import build_jetson_rtsp_pipeline
 from models.inference_engine import SynchronizedInferenceEngine
 from output.alert_manager import AlertManager
+from output.clinical_dashboard import _dashboard_html
 from pose.pose_estimator import MockPoseEngine, PoseEstimator
 from run import load_config
 from tracking.tracker import ByteTrackLikeTracker
@@ -120,6 +121,15 @@ def test_runtime_privacy_toggle_is_explicit_and_resets_enabled(tmp_path: Path) -
     assert initial["effective_mode"] == "person_pixelate"
     assert disabled["effective_mode"] == "none"
     assert restored["effective_mode"] == "person_pixelate"
+
+
+def test_dashboard_explains_event_score_and_temporal_evidence() -> None:
+    html = _dashboard_html()
+
+    assert "<th>Risk</th>" in html
+    assert "<th>Evidence</th>" in html
+    assert "Risk score = movement rules + recent motion" in html
+    assert "Recent movement pattern raised risk score" in html
 
 
 def test_tracker_reports_ids_removed_after_misses() -> None:

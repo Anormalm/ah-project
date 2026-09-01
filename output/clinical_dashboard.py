@@ -230,6 +230,18 @@ def _dashboard_html() -> str:
       font-size: 13px;
       font-weight: 650;
     }
+    .panel-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+    .panel-title h2 { margin: 0; }
+    .section-note {
+      color: var(--muted);
+      font-size: 11px;
+    }
     label {
       display: block;
       font-size: 11px;
@@ -263,13 +275,16 @@ def _dashboard_html() -> str:
       border-color: #e6aaa5;
       color: #8c1d18;
     }
-    .queue, .events {
+    .queue {
       display: grid;
       gap: 5px;
-      max-height: 42vh;
       overflow: auto;
     }
     .queue { max-height: calc(100vh - 172px); }
+    .events {
+      max-height: 42vh;
+      overflow: auto;
+    }
     .event-card {
       border: 1px solid var(--line);
       border-left: 3px solid var(--line);
@@ -296,6 +311,36 @@ def _dashboard_html() -> str:
     .meta > span + span::before { content: "·"; margin-right: 5px; }
     .row-actions { display: flex; gap: 5px; }
     .row-actions button { min-height: 25px; padding: 3px 7px; font-size: 11px; }
+    .event-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .event-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 6px 7px;
+      border-bottom: 1px solid var(--line);
+      background: #f7f8f9;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .3px;
+      text-align: left;
+      text-transform: uppercase;
+    }
+    .event-table td {
+      padding: 7px;
+      border-bottom: 1px solid #e6e8ea;
+      vertical-align: top;
+    }
+    .event-table tbody tr:hover { background: #f8f9fa; }
+    .event-table .score,
+    .event-table .time,
+    .event-table .track-id { white-space: nowrap; }
+    .event-table .evidence { color: var(--muted); }
+    .event-table .row-actions { min-width: 42px; }
     .badge {
       font-size: 10px;
       font-weight: 650;
@@ -427,7 +472,10 @@ def _dashboard_html() -> str:
         </article>
 
         <article class=\"panel\">
-          <h2>Events</h2>
+          <div class=\"panel-title\">
+            <h2>Events</h2>
+            <span class=\"section-note\">Risk score = movement rules + recent motion</span>
+          </div>
           <div id=\"events\" class=\"events\"></div>
         </article>
       </main>
@@ -474,6 +522,43 @@ def _dashboard_html() -> str:
       return new Date(ts * 1000).toLocaleTimeString();
     }
 
+    const eventLabels = {
+      fall_detected: 'Fall detected',
+      instability_risk: 'Instability',
+      inactivity_risk: 'Inactivity',
+      bed_exit_risk: 'Bed exit',
+      stable: 'Stable',
+    };
+    const reasonLabels = {
+      sitting_at_edge: 'Seated near bed edge',
+      sudden_vertical_drop: 'Rapid downward movement',
+      high_vertical_acceleration: 'Abrupt vertical movement',
+      lean_instability: 'Unstable lean',
+      repeated_sit_stand_transitions: 'Repeated sit/stand movement',
+      prolonged_inactivity: 'Prolonged inactivity',
+      temporal_high_probability: 'Recent movement pattern raised risk score',
+    };
+
+    function labelEvent(value) {
+      return eventLabels[value] || String(value || 'Unknown').replaceAll('_', ' ');
+    }
+
+    function labelReasons(values) {
+      if (!values || !values.length) return 'No trigger recorded';
+      return values.map(value => reasonLabels[value] || String(value).replaceAll('_', ' ')).join('; ');
+    }
+
+    function scoreText(value) {
+      return `${Math.round(Math.max(0, Math.min(1, Number(value || 0))) * 100)}%`;
+    }
+
+    function actionTemplate(row, event, level, showActions) {
+      if (!showActions || rank[level] < rank.HIGH) return '';
+      const label = row.acknowledged ? 'Undo' : 'Ack';
+      const sid = String(row.stream_id ?? '').replace(/'/g, "\\'");
+      return `<button class=\"btn-muted\" onclick=\"window._ack('${sid}', ${event.track_id ?? -1}, ${row.acknowledged ? 'true' : 'false'})\">${label}</button>`;
+    }
+
     function playBeep() {
       if (!soundOn) return;
       try {
@@ -499,14 +584,10 @@ def _dashboard_html() -> str:
     function cardTemplate(row, showActions) {
       const e = row.event || {};
       const level = e.risk_level || 'LOW';
-      const eventName = e.event || 'stable';
-      const reasons = (e.reasons || []).length ? e.reasons.join(', ') : '—';
+      const eventName = labelEvent(e.event || 'stable');
+      const reasons = labelReasons(e.reasons || []);
       const cls = `${level} ${row.acknowledged ? 'ack' : ''}`;
-      const ackLabel = row.acknowledged ? 'Undo' : 'Ack';
-      const sid = String(row.stream_id ?? '').replace(/'/g, "\\'");
-      const action = showActions && rank[level] >= rank.HIGH
-        ? `<button class=\"btn-muted\" onclick=\"window._ack('${sid}', ${e.track_id ?? -1}, ${row.acknowledged ? 'true' : 'false'})\">${ackLabel}</button>`
-        : '';
+      const action = actionTemplate(row, e, level, showActions);
 
       return `
         <article class=\"event-card ${cls}\">
@@ -519,12 +600,48 @@ def _dashboard_html() -> str:
           </div>
           <div class=\"meta\">
             <span>${eventName}</span>
-            <span>${(e.confidence ?? 0).toFixed(2)}</span>
+            <span>Risk ${scoreText(e.confidence)}</span>
             <span>${fmtTs(e.timestamp)}</span>
           </div>
           <div class=\"meta\"><span>${reasons}</span></div>
           <div class=\"row-actions\">${action}</div>
         </article>
+      `;
+    }
+
+    function eventTableTemplate(rows) {
+      const body = rows.map(row => {
+        const e = row.event || {};
+        const level = e.risk_level || 'LOW';
+        const action = actionTemplate(row, e, level, true);
+        return `
+          <tr class=\"${level} ${row.acknowledged ? 'ack' : ''}\">
+            <td class=\"time\">${fmtTs(e.timestamp)}</td>
+            <td><span class=\"badge\">${level}</span></td>
+            <td>${labelEvent(e.event || 'stable')}</td>
+            <td class=\"track-id\">
+              <div>${e.track_id ?? '-'}</div>
+              <div class=\"stream\">${row.stream_id ?? '—'}</div>
+            </td>
+            <td class=\"score\">${scoreText(e.confidence)}</td>
+            <td class=\"evidence\">${labelReasons(e.reasons || [])}</td>
+            <td><div class=\"row-actions\">${action}</div></td>
+          </tr>
+        `;
+      }).join('');
+      return `
+        <table class=\"event-table\">
+          <thead><tr>
+            <th>Time</th>
+            <th>Level</th>
+            <th>Event</th>
+            <th>Track</th>
+            <th>Risk</th>
+            <th>Evidence</th>
+            <th></th>
+          </tr></thead>
+          <tbody>${body}</tbody>
+        </table>
       `;
     }
 
@@ -549,7 +666,7 @@ def _dashboard_html() -> str:
         eventsEl.innerHTML = '<div class=\"empty\">No events</div>';
         return;
       }
-      eventsEl.innerHTML = rows.slice().reverse().map((a) => cardTemplate(a, true)).join('');
+      eventsEl.innerHTML = eventTableTemplate(rows.slice().reverse());
     }
 
     function updateFeed() {

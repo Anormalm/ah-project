@@ -341,8 +341,13 @@ Install librealsense/`pyrealsense2` for the target OS, connect the
 camera over USB 3, then verify that the device is visible before running:
 
 ```bash
-python run.py --config config/jetson_orin_nx_realsense_d435i.yaml
+source scripts/activate_jetson_env.sh
+dashboard
 ```
+
+This starts the D435i pipeline and serves the local dashboard at
+`http://127.0.0.1:8000/dashboard`. Set `AH_DASHBOARD_CONFIG` before running
+`dashboard` to select another configuration.
 
 For multiple connected cameras, replace `source: auto` with the D435i serial.
 Keep the camera IMU disabled for the initial fixed-mount deployment.

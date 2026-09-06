@@ -14,4 +14,4 @@ if [[ -d "$cusparselt_lib" ]]; then
   export LD_LIBRARY_PATH="$cusparselt_lib:${LD_LIBRARY_PATH:-}"
 fi
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-12.6}"
-export PATH="$CUDA_HOME/bin:$PATH"
+export PATH="$project_dir/bin:$CUDA_HOME/bin:$PATH"

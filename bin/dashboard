@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$project_dir/scripts/activate_jetson_env.sh"
+cd "$project_dir"
+
+config_path="${AH_DASHBOARD_CONFIG:-config/jetson_orin_nx_realsense_d435i.yaml}"
+exec python run.py --config "$config_path" "$@"

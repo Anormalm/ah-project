@@ -112,7 +112,7 @@ class AlertManager:
     def get_effective_privacy_mode(self, stream_id: str) -> str:
         return str(self.get_privacy_status(stream_id)["effective_mode"])
 
-    def update_stream_health(self, stream_id: str, fps: float, source) -> None:
+    def update_stream_health(self, stream_id: str, fps: float, source, depth_measurements=None) -> None:
         with self._lock:
             self._stream_ids.add(stream_id)
             self._stream_health[stream_id] = {
@@ -121,6 +121,7 @@ class AlertManager:
                 "frames_captured": int(getattr(source, "frames_captured", 0)),
                 "frames_dropped": int(getattr(source, "frames_dropped", 0)),
                 "reconnect_count": int(getattr(source, "reconnect_count", 0)),
+                "depth": depth_measurements,
             }
 
     def get_health(self, stale_after_sec: float = 10.0) -> dict[str, Any]:

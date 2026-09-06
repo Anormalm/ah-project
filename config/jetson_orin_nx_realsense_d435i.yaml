@@ -1,5 +1,11 @@
 extends: jetson_orin_nx_sota.yaml
 
+depth:
+  enabled: true
+  min_m: 0.3
+  max_m: 6.0
+  min_valid_fraction: 0.2
+
 # Direct USB RGB-D preparation profile. This bypasses the RTSP/NVDEC ingestion
 # path but retains the same TensorRT pose, tracking, rules and output stack.
 streams:

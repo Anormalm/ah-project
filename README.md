@@ -330,8 +330,14 @@ module latency; the soak script records `tegrastats` alongside the application l
 
 The optional `config/jetson_orin_nx_realsense_d435i.yaml` profile accepts aligned
 BGR and depth frames directly over USB while keeping the existing RGB pose path.
-Depth is captured now for calibration and later 3D feature work; risk decisions do
-not use it yet. Install librealsense/`pyrealsense2` for the target OS, connect the
+The D435i profile enforces aligned depth before tracking: the central half of each
+person box must contain at least 20% valid depth and have median range 0.3–6 m.
+Configure these limits under `depth`; rejected detections and their poses are
+excluded from tracker updates. Missing or misaligned depth stops processing.
+Per-detection range, valid fraction and acceptance are available in `/health`.
+This range check does not estimate floor-relative height or prove that a fall
+occurred. Depth holes can reject real people; validate limits at the installation.
+Install librealsense/`pyrealsense2` for the target OS, connect the
 camera over USB 3, then verify that the device is visible before running:
 
 ```bash
@@ -340,6 +346,30 @@ python run.py --config config/jetson_orin_nx_realsense_d435i.yaml
 
 For multiple connected cameras, replace `source: auto` with the D435i serial.
 Keep the camera IMU disabled for the initial fixed-mount deployment.
+
+### Comparing vision stacks
+
+Run from the repository root on the same recorded RGB clip:
+
+```bash
+source scripts/activate_jetson_env.sh
+python scripts/benchmark_vision_stacks.py --source /data/session.mp4
+```
+
+`config/benchmark_vision.json` compares YOLO26s TensorRT FP16, RTMPose-m with
+MMPose's default person detector, and RTMO-m. Install a compatible MMPose,
+MMCV (compiled ops), MMEngine and MMDetection environment for the latter two;
+they are not installed by the Jetson setup script. Initial model loading may
+download checkpoints. Use `pose_weights`, `det_model`, and `det_weights` in each
+suite entry to pin local checkpoints and the detector for reproducibility.
+The RTMPose pipeline example is `config/jetson_realsense_rtmpose.yaml`.
+
+The runner replays identical frames, warms each backend and synchronizes CUDA.
+JSON and CSV contain p50/p95/p99 latency, FPS, person counts and keypoint coverage.
+Detection and preprocessing are included; depth, tracking and alerts are excluded.
+TensorRT vs MMPose PyTorch results compare deployed stacks, not architecture alone.
+Coverage is not accuracy; labeled held-out clips are needed for pose accuracy,
+fall recall and false alerts/hour. Failed candidates remain explicit in reports.
 The local dashboard exposes a red `Privacy: OFF — DEBUG` toggle for this profile;
 anonymization always returns to `person_pixelate` when the process restarts.
 

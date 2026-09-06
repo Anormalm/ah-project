@@ -163,7 +163,9 @@ class UltralyticsPoseEngine(InferenceEngine):
 
 
 class RTMOMMPoseEngine(InferenceEngine):
-    def __init__(self, model_alias: str = "rtmo-m", device: str = "cpu", bbox_thr: float = 0.2) -> None:
+    def __init__(self, model_alias: str = "rtmo-m", device: str = "cpu", bbox_thr: float = 0.2,
+                 pose_weights: str | None = None, det_model: str | None = None,
+                 det_weights: str | None = None) -> None:
         try:
             from mmpose.apis import MMPoseInferencer
         except ImportError as exc:
@@ -172,7 +174,11 @@ class RTMOMMPoseEngine(InferenceEngine):
                 "pip install -U openmim && mim install mmengine mmcv mmpose"
             ) from exc
 
-        self._inferencer = MMPoseInferencer(pose2d=model_alias, device=device)
+        options = {key: value for key, value in {
+            "pose2d_weights": pose_weights, "det_model": det_model,
+            "det_weights": det_weights,
+        }.items() if value is not None}
+        self._inferencer = MMPoseInferencer(pose2d=model_alias, device=device, **options)
         self.bbox_thr = bbox_thr
 
     @staticmethod
@@ -223,6 +229,8 @@ class RTMOMMPoseEngine(InferenceEngine):
             if not isinstance(inst, dict):
                 continue
             kpts = self._to_kpts_xyc(inst.get("keypoints", []), inst.get("keypoint_scores"))
+            if kpts.shape != (17, 3):
+                raise ValueError("Pipeline requires a COCO 17-keypoint model")
             bbox = self._to_bbox(inst, kpts)
             bbox_score = float(inst.get("bbox_score", np.mean(kpts[:, 2]) if kpts.size else 0.0))
             if bbox_score < self.bbox_thr:
@@ -335,4 +343,3 @@ class PoseEstimator:
 
         h, w = frame.shape[:2]
         return self.predict(frame, [(0.0, 0.0, float(w - 1), float(h - 1))])
-

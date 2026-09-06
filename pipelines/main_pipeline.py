@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from detection.yolo_detector import MockDetectionEngine, UltralyticsYOLOEngine, YOLOPersonDetector
 from features.feature_extractor import FeatureExtractor
+from features.depth_gate import filter_by_depth
 from ingestion.realsense_source import create_realsense_source
 from ingestion.rtsp_stream import create_rtsp_source
 from ingestion.video_loader import create_video_source
@@ -292,11 +293,16 @@ class RiskDetectionPipeline:
                     allow_cpu_fallback=self.pipeline_cfg.allow_cpu_fallback,
                 ),
             )
-        elif backend_type in {"rtmo", "rtmo_mmpose"}:
+        elif backend_type in {"rtmo", "rtmo_mmpose", "rtmpose_mmpose"}:
+            if backend_type == "rtmpose_mmpose" and not pose_cfg.get("model_alias"):
+                raise ValueError("rtmpose_mmpose requires an explicit COCO-17 model_alias")
             backend = RTMOMMPoseEngine(
                 model_alias=pose_cfg.get("model_alias", "rtmo-m"),
                 device=self.device,
                 bbox_thr=pose_cfg.get("bbox_thr", 0.2),
+                pose_weights=pose_cfg.get("pose_weights"),
+                det_model=pose_cfg.get("det_model"),
+                det_weights=pose_cfg.get("det_weights"),
             )
         else:
             backend = MockPoseEngine()
@@ -434,6 +440,18 @@ class RiskDetectionPipeline:
                     with self._perf.track("pose"):
                         poses = self.pose_estimator.predict(frame, bboxes)
 
+                depth_measurements = None
+                depth_cfg = self.cfg.get("depth", {})
+                if depth_cfg.get("enabled", False):
+                    with self._perf.track("depth"):
+                        detections, poses, depth_measurements = filter_by_depth(
+                            packet, detections, poses,
+                            min_m=float(depth_cfg.get("min_m", 0.3)),
+                            max_m=float(depth_cfg.get("max_m", 6.0)),
+                            min_valid_fraction=float(depth_cfg.get("min_valid_fraction", 0.2)),
+                        )
+                    self.logger.debug("depth=%s", depth_measurements)
+
                 with self._perf.track("tracking"):
                     tracks = self.tracker.update(detections, poses, timestamp=ts)
                 self._cleanup_track_state(self.tracker.last_removed_track_ids)
@@ -460,7 +478,8 @@ class RiskDetectionPipeline:
 
                 frame_count += 1
                 fps = self._fps.tick()
-                self.alert_manager.update_stream_health(self.stream.stream_id, fps=fps, source=self.source)
+                self.alert_manager.update_stream_health(self.stream.stream_id, fps=fps, source=self.source,
+                                                        depth_measurements=depth_measurements)
                 needs_composed_frame = self.visualizer.cfg.enabled or self._live_stream_enabled
                 if needs_composed_frame:
                     with self._perf.track("visualization"):

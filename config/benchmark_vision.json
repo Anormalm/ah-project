@@ -1,0 +1,5 @@
+[
+  {"name": "YOLO26s TensorRT FP16 640", "backend": "ultralytics", "model": "models/yolo26s-pose-fp16-640.engine", "imgsz": 640},
+  {"name": "RTMPose-m + MMPose default person detector", "backend": "mmpose", "model": "rtmpose-m_8xb256-420e_aic-coco-256x192"},
+  {"name": "RTMO-m via MMPose", "backend": "mmpose", "model": "rtmo-m"}
+]

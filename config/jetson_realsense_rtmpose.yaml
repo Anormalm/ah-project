@@ -1,0 +1,8 @@
+extends: jetson_orin_nx_realsense_d435i.yaml
+
+# MMPose performs person detection internally for this top-down pose model.
+detection:
+  backend: none
+pose:
+  backend: rtmpose_mmpose
+  model_alias: rtmpose-m_8xb256-420e_aic-coco-256x192

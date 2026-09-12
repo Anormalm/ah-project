@@ -1,0 +1,147 @@
+logging:
+  level: INFO
+
+pipeline:
+  device: auto
+  fps: 30
+  buffer_size: 2
+  max_frames: null
+  metrics_interval_sec: 2
+  sequence_len: 10
+
+ingestion:
+  rtsp_reconnect_sec: 2.0
+  rtsp_max_retries: 5
+  webcam_requested_fps: 30
+  webcam_width: 640
+  webcam_height: 480
+  realsense:
+    require_usb3: true
+    inference_stream: color
+    frame_timeout_sec: 5.0
+    max_motion_samples: 2048
+    color:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 30
+    depth:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 30
+    infrared:
+      enabled: true
+      indices: [1, 2]
+      width: 640
+      height: 480
+      fps: 30
+    imu:
+      enabled: true
+      accel_enabled: true
+      accel_fps: 100
+      gyro_enabled: true
+      gyro_fps: 200
+
+streams:
+  - stream_id: d435i
+    type: realsense
+    source: auto
+
+detection:
+  backend: none
+  model_path: models/yolo11n.pt
+  conf_threshold: 0.30
+  person_class_id: 0
+
+pose:
+  backend: ultralytics_pose
+  model_path: models/yolo11n-pose.pt
+  input_size: 320
+  match_iou_threshold: 0.1
+
+tracking:
+  iou_threshold: 0.15
+  max_misses: 12
+  center_distance_threshold: 0.45
+
+features:
+  min_keypoint_conf: 0.2
+  camera_motion_gyro_threshold_rad_s: 0.35
+  camera_motion_accel_delta_threshold_m_s2: 2.0
+  kinematic_ema_alpha: 0.30
+  max_kinematic_gap_sec: 0.4
+  max_3d_speed_m_s: 4.0
+
+rules:
+  bed_edge_distance_px: 40.0
+  sitting_edge_seconds: 5.0
+  sudden_drop_vy: 180.0
+  sudden_drop_ay: 900.0
+  lean_angle_deg: 30.0
+  lean_std_deg: 8.0
+  inactivity_speed_px_s: 8.0
+  inactivity_seconds: 20.0
+  transition_window_sec: 15.0
+  transition_threshold: 4
+  enable_sitting_edge_rule: false
+  enable_fall_rule: true
+  enable_lean_instability_rule: false
+  enable_inactivity_rule: false
+  enable_transition_rule: false
+  suppress_motion_sensitive_rules_on_camera_motion: true
+  require_fall_confirmation: true
+  fall_motion_window_sec: 0.8
+  fall_confirmation_window_sec: 1.3
+  fall_min_track_frames: 8
+  fall_min_pose_valid_ratio: 0.5
+  fall_require_depth: true
+  fall_require_metric_drop: true
+  fall_min_depth_valid_ratio: 0.6
+  fall_min_drop_px: 45.0
+  fall_min_drop_body_ratio: 0.22
+  fall_min_drop_m: 0.18
+  fall_confirm_lying_frames: 3
+  fall_confirm_lean_angle_deg: 55.0
+  fall_camera_settle_sec: 1.0
+  fall_cooldown_sec: 8.0
+
+temporal_model:
+  # Run the public-data model in shadow mode first. Probabilities are logged,
+  # while risk.ml_weight=0 keeps live alert decisions on the depth-confirmed rules.
+  backend: torch_gru
+  model_path: models/temporal_gru_caucafall.pt
+  # CAUCAFall is sampled at 20 FPS; live 30 FPS features are timestamp-resampled.
+  model_fps: 20
+
+risk:
+  ml_weight: 0.0
+  medium_threshold: 0.45
+  high_threshold: 0.7
+  critical_threshold: 0.9
+  allow_ml_level_override: false
+  ema_alpha: 0.25
+  downgrade_grace_sec: 1.0
+
+output:
+  json_log_path: output/alerts_d435i.jsonl
+  feedback_log_path: output/feedback_d435i.jsonl
+  training_log_path: output/train_features_d435i.jsonl
+  enable_rest_api: true
+  rest_api_host: 127.0.0.1
+  rest_api_port: 8001
+  live_stream:
+    enabled: true
+    jpeg_quality: 75
+  visualization:
+    enabled: true
+    show_bboxes: true
+    show_pose: true
+    show_tracks: true
+    show_risk: true
+    show_bed_zones: false
+    show_fps: true
+    keypoint_conf_threshold: 0.2
+    window_scale: 1.0
+    quit_key: q
+    quit_keys: [q, esc]

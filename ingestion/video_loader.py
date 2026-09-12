@@ -3,17 +3,12 @@
 import queue
 import threading
 import time
-from dataclasses import dataclass
 from typing import Optional
 
 import cv2
 import numpy as np
 
-
-@dataclass
-class FramePacket:
-    frame: Optional[np.ndarray]
-    timestamp: float
+from ingestion.frame_packet import FramePacket
 
 
 class AsyncVideoSource:

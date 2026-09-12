@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import math
 import signal
 import threading
 import time
@@ -34,7 +35,7 @@ from utils.schemas import Detection
 
 class StreamConfig(BaseModel):
     stream_id: str
-    type: str = Field(pattern="^(webcam|video|rtsp|dummy)$")
+    type: str = Field(pattern="^(webcam|video|rtsp|dummy|realsense)$")
     source: str | int
 
 
@@ -45,6 +46,25 @@ class PipelineConfig(BaseModel):
     max_frames: int | None = None
     metrics_interval_sec: float = 3.0
     sequence_len: int = 16
+
+
+def _risk_config_with_model_threshold(
+    risk_cfg: dict[str, Any],
+    temporal_model: TemporalRiskModel,
+) -> dict[str, Any]:
+    resolved = dict(risk_cfg)
+    if "ml_decision_threshold" not in resolved:
+        checkpoint_threshold = getattr(temporal_model, "decision_threshold", None)
+        if checkpoint_threshold is not None:
+            resolved["ml_decision_threshold"] = float(checkpoint_threshold)
+    return resolved
+
+
+def _history_buffer_length(sequence_len: int, source_fps: float, model_fps: float | None) -> int:
+    if model_fps is None or model_fps <= 0.0 or source_fps <= 0.0:
+        return sequence_len
+    trained_horizon_seconds = max(sequence_len - 1, 0) / model_fps
+    return max(sequence_len, int(math.ceil(trained_horizon_seconds * source_fps)) + 1)
 
 
 class RiskDetectionPipeline:
@@ -61,6 +81,7 @@ class RiskDetectionPipeline:
         self.tracker = ByteTrackLikeTracker(
             iou_threshold=cfg["tracking"]["iou_threshold"],
             max_misses=cfg["tracking"]["max_misses"],
+            center_distance_threshold=cfg["tracking"].get("center_distance_threshold", 0.45),
         )
 
         bed_zones = [tuple(zone) for zone in cfg["features"].get("bed_zones", [])]
@@ -68,11 +89,22 @@ class RiskDetectionPipeline:
         self.feature_extractor = FeatureExtractor(
             bed_zones=bed_zones,
             min_kpt_conf=cfg["features"]["min_keypoint_conf"],
+            camera_motion_gyro_threshold_rad_s=cfg["features"].get(
+                "camera_motion_gyro_threshold_rad_s", 0.35
+            ),
+            camera_motion_accel_delta_threshold_m_s2=cfg["features"].get(
+                "camera_motion_accel_delta_threshold_m_s2", 2.0
+            ),
+            kinematic_ema_alpha=cfg["features"].get("kinematic_ema_alpha", 1.0),
+            max_kinematic_gap_sec=cfg["features"].get("max_kinematic_gap_sec", 0.5),
+            max_3d_speed_m_s=cfg["features"].get("max_3d_speed_m_s", 5.0),
         )
 
         self.rule_engine = RuleEngine(**cfg["rules"])
         self.temporal_model = self._build_temporal_model()
-        self.risk_scorer = RiskScorer(**cfg["risk"])
+        self.risk_scorer = RiskScorer(
+            **_risk_config_with_model_threshold(cfg["risk"], self.temporal_model)
+        )
 
         alert_cfg = cfg["output"]
         live_stream_cfg = alert_cfg.get("live_stream", {})
@@ -85,6 +117,7 @@ class RiskDetectionPipeline:
                 api_port=alert_cfg["rest_api_port"],
                 frame_jpeg_quality=int(live_stream_cfg.get("jpeg_quality", 80)),
                 logger_name=f"alerts.{stream.stream_id}",
+                feedback_log_path=alert_cfg.get("feedback_log_path"),
             )
             self._owns_alert_manager = True
         else:
@@ -98,11 +131,25 @@ class RiskDetectionPipeline:
         self._stop_event = threading.Event()
         self._perf = PerformanceTracker()
         self._fps = FPSMonitor()
-        self._seq: dict[int, deque] = defaultdict(lambda: deque(maxlen=self.pipeline_cfg.sequence_len))
+        history_length = _history_buffer_length(
+            sequence_len=self.temporal_model.sequence_len,
+            source_fps=self.pipeline_cfg.fps,
+            model_fps=getattr(self.temporal_model, "model_fps", None),
+        )
+        self._seq: dict[int, deque] = defaultdict(lambda: deque(maxlen=history_length))
 
     def _build_source(self):
         fps = self.pipeline_cfg.fps
         buffer_size = self.pipeline_cfg.buffer_size
+        if self.stream.type == "realsense":
+            from ingestion.realsense_source import create_realsense_source
+
+            return create_realsense_source(
+                source=str(self.stream.source),
+                fps=fps,
+                buffer_size=buffer_size,
+                options=self.cfg["ingestion"].get("realsense", {}),
+            )
         if self.stream.type == "rtsp":
             return create_rtsp_source(
                 rtsp_url=str(self.stream.source),
@@ -210,6 +257,7 @@ class RiskDetectionPipeline:
             sequence_len=self.pipeline_cfg.sequence_len,
             infer_interval=int(tm_cfg.get("infer_interval", 1)),
             min_infer_steps=int(tm_cfg.get("min_infer_steps", 2)),
+            model_fps=tm_cfg.get("model_fps"),
         )
 
     def _detections_from_poses(self, poses) -> list[Detection]:
@@ -275,7 +323,7 @@ class RiskDetectionPipeline:
 
                 for track in tracks:
                     with self._perf.track("features"):
-                        feature = self.feature_extractor.extract(track)
+                        feature = self.feature_extractor.extract(track, sensor_frame=packet.sensor)
                     self._seq[track.track_id].append(feature)
 
                     with self._perf.track("rules"):
@@ -289,7 +337,12 @@ class RiskDetectionPipeline:
                         event = self.risk_scorer.score(rule_decision, ml_prob)
                     with self._perf.track("output"):
                         self.alert_manager.emit(self.stream.stream_id, event)
-                        self.training_logger.emit(self.stream.stream_id, feature, event)
+                        self.training_logger.emit(
+                            self.stream.stream_id,
+                            feature,
+                            event,
+                            ml_probability=ml_prob,
+                        )
                     risk_events[track.track_id] = event
 
                 frame_count += 1
@@ -307,6 +360,7 @@ class RiskDetectionPipeline:
                     with self._perf.track("ui_stream"):
                         self.alert_manager.publish_frame(self.stream.stream_id, frame)
                 packet.frame = None
+                packet.sensor = None
                 del frame
                 del detections
                 del poses
@@ -346,6 +400,7 @@ class MultiStreamRunner:
             api_port=output_cfg["rest_api_port"],
             frame_jpeg_quality=int(live_stream_cfg.get("jpeg_quality", 80)),
             logger_name="alerts",
+            feedback_log_path=output_cfg.get("feedback_log_path"),
         )
         self.pipelines = [RiskDetectionPipeline(stream=s, cfg=cfg, alert_manager=self.alert_manager) for s in stream_cfgs]
 

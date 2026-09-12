@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import math
 import queue
 import threading
 import time
@@ -17,6 +18,7 @@ from utils.schemas import AlertRecord, RiskEvent
 
 class AlertManager:
     _rank = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    _feedback_labels = frozenset({"confirmed_fall", "false_alarm", "non_fall_activity", "unclear"})
 
     def __init__(
         self,
@@ -26,9 +28,13 @@ class AlertManager:
         api_port: int = 8000,
         frame_jpeg_quality: int = 80,
         logger_name: str = "alert_manager",
+        feedback_log_path: str | None = None,
     ) -> None:
         self.log_path = Path(json_log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.feedback_log_path = Path(feedback_log_path) if feedback_log_path else None
+        if self.feedback_log_path is not None:
+            self.feedback_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.enable_api = enable_api
         self.api_host = api_host
         self.api_port = api_port
@@ -41,6 +47,7 @@ class AlertManager:
         self._acked_tracks: dict[tuple[str, int], dict[str, Any]] = {}
         self._last_track_level: dict[tuple[str, int], str] = {}
         self._lock = threading.Lock()
+        self._feedback_lock = threading.Lock()
         self._start_lock = threading.Lock()
         self._server_thread: threading.Thread | None = None
         self._subscribers: list[queue.Queue[dict[str, Any]]] = []
@@ -106,6 +113,39 @@ class AlertManager:
     def get_summary(self) -> dict[str, Any]:
         return build_summary(self.get_latest(limit=512), self.get_open_alerts(limit=512))
 
+    def record_feedback(
+        self,
+        stream_id: str,
+        track_id: int,
+        timestamp: float,
+        label: str,
+    ) -> dict[str, Any]:
+        normalized_stream_id = str(stream_id).strip()
+        normalized_label = str(label).strip().lower()
+        target_timestamp = float(timestamp)
+        if not normalized_stream_id:
+            raise ValueError("stream_id is required")
+        if normalized_label not in self._feedback_labels:
+            allowed = ", ".join(sorted(self._feedback_labels))
+            raise ValueError(f"Unsupported feedback label. Expected one of: {allowed}")
+        if not math.isfinite(target_timestamp) or target_timestamp <= 0.0:
+            raise ValueError("timestamp must be a positive finite number")
+        if self.feedback_log_path is None:
+            raise RuntimeError("Feedback logging is disabled; configure output.feedback_log_path")
+
+        payload = {
+            "stream_id": normalized_stream_id,
+            "track_id": int(track_id),
+            "timestamp": target_timestamp,
+            "label": normalized_label,
+            "annotated_at": time.time(),
+        }
+        line = json.dumps(payload, separators=(",", ":"))
+        with self._feedback_lock:
+            with self.feedback_log_path.open("a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        return payload
+
     def get_stream_ids(self) -> list[str]:
         with self._lock:
             return sorted(self._stream_ids)
@@ -139,8 +179,23 @@ class AlertManager:
     def get_open_alerts(self, limit: int = 100, min_level: str = "HIGH") -> list[dict[str, Any]]:
         rank_floor = self._rank.get(min_level.upper(), self._rank["HIGH"])
         rows = self.get_latest(limit=max(limit, 512))
+        latest_by_track: dict[tuple[str, int], dict[str, Any]] = {}
+        for row in rows:
+            event = row.get("event") or {}
+            key = (str(row.get("stream_id", "unknown")), int(event.get("track_id", -1)))
+            current = latest_by_track.get(key)
+            current_ts = float((current.get("event") or {}).get("timestamp", 0.0)) if current else float("-inf")
+            row_ts = float(event.get("timestamp", 0.0))
+            if current is None or row_ts >= current_ts:
+                latest_by_track[key] = row
+
         filtered: list[dict[str, Any]] = []
-        for row in reversed(rows):
+        latest_rows = sorted(
+            latest_by_track.values(),
+            key=lambda row: float((row.get("event") or {}).get("timestamp", 0.0)),
+            reverse=True,
+        )
+        for row in latest_rows:
             event = row.get("event") or {}
             level = str(event.get("risk_level", "LOW"))
             if self._rank.get(level, 0) < rank_floor:

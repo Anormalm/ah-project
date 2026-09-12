@@ -22,6 +22,7 @@ class RiskScorer:
         high_threshold: float = 0.7,
         critical_threshold: float = 0.9,
         allow_ml_level_override: bool = True,
+        ml_decision_threshold: float | None = None,
         ema_alpha: float = 0.35,
         downgrade_grace_sec: float = 2.0,
     ) -> None:
@@ -30,6 +31,9 @@ class RiskScorer:
         self.high_threshold = high_threshold
         self.critical_threshold = critical_threshold
         self.allow_ml_level_override = allow_ml_level_override
+        if ml_decision_threshold is not None and not 0.0 <= ml_decision_threshold <= 1.0:
+            raise ValueError("ml_decision_threshold must be between 0 and 1")
+        self.ml_decision_threshold = ml_decision_threshold
         self.ema_alpha = ema_alpha
         self.downgrade_grace_sec = downgrade_grace_sec
         self._state: dict[int, _RiskState] = {}
@@ -46,7 +50,7 @@ class RiskScorer:
 
     @staticmethod
     def _event_type(level: str, reasons: list[str]) -> str:
-        if "sudden_vertical_drop" in reasons or level == "CRITICAL":
+        if "confirmed_fall" in reasons or "sudden_vertical_drop" in reasons:
             return "fall_detected"
         if "lean_instability" in reasons or "repeated_sit_stand_transitions" in reasons or level == "HIGH":
             return "instability_risk"
@@ -85,17 +89,22 @@ class RiskScorer:
         return ema, stable_level
 
     def score(self, rule_decision: RuleDecision, ml_probability: float) -> RiskEvent:
-        fused = (1.0 - self.ml_weight) * rule_decision.rule_score + self.ml_weight * ml_probability
+        ml_is_active = self.ml_decision_threshold is None or ml_probability >= self.ml_decision_threshold
+        effective_ml_weight = self.ml_weight if ml_is_active else 0.0
+        fused = (
+            (1.0 - effective_ml_weight) * rule_decision.rule_score
+            + effective_ml_weight * ml_probability
+        )
         ml_level = self._level_from_prob(ml_probability, self.medium_threshold, self.high_threshold, self.critical_threshold)
 
         raw_level = rule_decision.rule_level
-        if self.allow_ml_level_override and self._rank[ml_level] > self._rank[raw_level]:
+        if ml_is_active and self.allow_ml_level_override and self._rank[ml_level] > self._rank[raw_level]:
             raw_level = ml_level
 
         confidence, final_level = self._stabilize(rule_decision.track_id, fused, raw_level, rule_decision.timestamp)
 
         reasons = list(rule_decision.reasons)
-        if ml_probability >= self.high_threshold:
+        if ml_is_active and ml_probability >= self.high_threshold:
             reasons.append("ml_high_probability")
 
         return RiskEvent(

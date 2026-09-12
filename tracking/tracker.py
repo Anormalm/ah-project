@@ -23,9 +23,15 @@ class _TrackState:
 
 
 class ByteTrackLikeTracker:
-    def __init__(self, iou_threshold: float = 0.3, max_misses: int = 20) -> None:
+    def __init__(
+        self,
+        iou_threshold: float = 0.3,
+        max_misses: int = 20,
+        center_distance_threshold: float = 0.45,
+    ) -> None:
         self.iou_threshold = iou_threshold
         self.max_misses = max_misses
+        self.center_distance_threshold = max(float(center_distance_threshold), 0.0)
         self._next_id = 1
         self._tracks: dict[int, _TrackState] = {}
 
@@ -53,10 +59,28 @@ class ByteTrackLikeTracker:
             return [], list(range(len(track_ids))), list(range(len(detections)))
 
         matrix = np.zeros((len(track_ids), len(detections)), dtype=np.float32)
+        valid_pair = np.zeros((len(track_ids), len(detections)), dtype=bool)
         for i, tid in enumerate(track_ids):
             tbox = self._tracks[tid].bbox
             for j, det in enumerate(detections):
-                matrix[i, j] = 1.0 - self._iou(tbox, det.bbox)
+                iou = self._iou(tbox, det.bbox)
+                tcx = (tbox[0] + tbox[2]) * 0.5
+                tcy = (tbox[1] + tbox[3]) * 0.5
+                dcx = (det.bbox[0] + det.bbox[2]) * 0.5
+                dcy = (det.bbox[1] + det.bbox[3]) * 0.5
+                scale = max(
+                    np.hypot(tbox[2] - tbox[0], tbox[3] - tbox[1]),
+                    np.hypot(det.bbox[2] - det.bbox[0], det.bbox[3] - det.bbox[1]),
+                    1.0,
+                )
+                center_distance = float(np.hypot(dcx - tcx, dcy - tcy) / scale)
+                valid_pair[i, j] = bool(
+                    iou >= self.iou_threshold
+                    or center_distance <= self.center_distance_threshold
+                )
+                # Center proximity keeps an identity through pose-box shape changes,
+                # while IoU remains the preferred association signal.
+                matrix[i, j] = min(1.0 - iou, center_distance)
 
         matches: list[tuple[int, int]] = []
         unmatched_tracks = set(range(len(track_ids)))
@@ -65,8 +89,7 @@ class ByteTrackLikeTracker:
         if linear_sum_assignment is not None:
             rows, cols = linear_sum_assignment(matrix)
             for r, c in zip(rows, cols):
-                iou = 1.0 - matrix[r, c]
-                if iou < self.iou_threshold:
+                if not valid_pair[r, c]:
                     continue
                 matches.append((r, c))
                 unmatched_tracks.discard(r)
@@ -74,8 +97,7 @@ class ByteTrackLikeTracker:
         else:
             for r in range(matrix.shape[0]):
                 c = int(np.argmin(matrix[r]))
-                iou = 1.0 - matrix[r, c]
-                if iou >= self.iou_threshold and c in unmatched_dets and r in unmatched_tracks:
+                if valid_pair[r, c] and c in unmatched_dets and r in unmatched_tracks:
                     matches.append((r, c))
                     unmatched_tracks.discard(r)
                     unmatched_dets.discard(c)

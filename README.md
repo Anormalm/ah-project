@@ -73,8 +73,22 @@ python run.py --config config/stack3_rtmo_mmpose_ward6.yaml
 python run.py --config config/stack2_sota_transformer_realtime.yaml
 ```
 
-For stacks A/B/C/D, open:
-- `http://127.0.0.1:8000/dashboard`
+### 5) Intel RealSense D435i - synchronized RGB, depth, IR, and IMU
+
+Connect the camera directly over USB 3.x, then install the optional SDK binding and run:
+
+```powershell
+python -m pip install -r requirements-realsense.txt
+python run.py --config config/d435i_all_feeds.yaml
+```
+
+The D435i profile performs pose inference once on RGB. Synchronized, color-aligned depth adds metric 3D motion features; accelerometer and gyroscope samples detect camera movement so motion-sensitive rules can be suppressed. Both infrared feeds are captured as auxiliary data without creating duplicate tracks or alerts.
+
+The profile requires a verified USB 3.x link. A USB 2.x cable, hub, or port is rejected because full-feed capture is not reliable at that bandwidth.
+
+For stacks A/B/C/D, open `http://127.0.0.1:8000/dashboard`. The D435i profile
+uses `http://127.0.0.1:8001/dashboard` so it can run alongside another local
+service already using port 8000.
 - Includes live camera stream panel with pose overlays + live alert feed.
 
 Stack B also writes training-ready feature logs to:
@@ -167,17 +181,53 @@ Sample event payload:
 
 ## Train Temporal Model (GRU or Transformer Lite)
 
-1) Collect feature logs while running Stack B:
+1) Collect synchronized feature logs and dashboard feedback with the D435i
+profile:
 
 ```powershell
-python run.py --config config/stack2_ultralytics_twostage_balanced.yaml
+python run.py --config config/d435i_all_feeds.yaml
 ```
+
+This writes `output/train_features_d435i.jsonl` and
+`output/feedback_d435i.jsonl`. Stack B can still collect weakly labeled feature
+logs, but its configuration needs an `output.feedback_log_path` before the
+dashboard can save reviews.
+
+Feature-log predictions are stored as `weak_label`, not `label`: they are useful
+for bootstrapping, but they are not ground truth. Each process run has a stable
+`session_id`, and the log also retains depth coverage, camera-motion quality
+signals, and available metric 3D position/velocity/acceleration. These extra
+fields are kept for review and weighting; the temporal model input remains the
+original five values (`speed`, `vy`, `acc`, `lean`, and `posture`).
+
+For human-supervised training, enable `output.feedback_log_path` and use the
+dashboard's **Confirm Fall**, **False Alarm**, and **Mark current activity normal** controls.
+They append annotations such as:
+
+```json
+{"stream_id":"d435i","track_id":3,"timestamp":1774937600.12,"label":"confirmed_fall","annotated_at":1774937604.82}
+```
+
+- Dashboard labels map as follows: `confirmed_fall` is positive;
+  `false_alarm` and `non_fall_activity` are negative; `unclear` is skipped.
+  Numeric `0`/`1` and `no_fall`/`fall` are also accepted for imported reviews.
+- `track_id: -1` applies the annotation to the nearest eligible window for every
+  active track in the matching session and stream.
+- `session_id` and `stream_id` may be omitted as wildcards, but including both
+  prevents accidental matches across camera runs.
+- Rows marked `reviewed: false`, or labels/statuses such as `unclear` and
+  `unreviewed`, are skipped. Once `--feedback` is supplied, unmatched windows
+  and weak labels are excluded from training.
+- `weight` is optional, positive, and defaults to `1.0`.
+
+The annotation timestamp is matched to the closest sequence-window end within
+the inclusive tolerance set by `--feedback-max-seconds` (default: 2 seconds).
 
 2) Train a low-latency Transformer Lite model from collected logs:
 
 ```powershell
 python scripts/train_temporal_gru.py `
-  --input output/train_features_stack2.jsonl `
+  --input output/train_features_d435i.jsonl `
   --format frame `
   --model-type transformer_lite `
   --hidden-size 32 `
@@ -185,6 +235,8 @@ python scripts/train_temporal_gru.py `
   --attention-heads 2 `
   --ff-mult 2 `
   --sequence-len 16 `
+  --feedback output/feedback_d435i.jsonl `
+  --feedback-max-seconds 2.0 `
   --epochs 25 `
   --batch-size 64 `
   --device cpu `
@@ -210,6 +262,48 @@ python scripts/train_temporal_gru.py `
 
 python run.py --config config/stack2_ultralytics_twostage_trained.yaml
 ```
+
+### Train from CAUCAFall
+
+The public-data path expects the official CAUCAFall `Subject.N/<Activity>`
+tree with each AVI and its consolidated `annotations.jsonl`. The converter
+uses the supplied person boxes as padded pose crops and reports any labelled
+fall clip that still produced no usable positive sequence. Build a
+subject-isolated manifest, extract the same five motion features used at
+runtime, then train with an explicit validation file:
+
+```powershell
+python scripts/build_caucafall_manifest.py `
+  --dataset-root data/raw/caucafall_v5 `
+  --output config/caucafall_manifest.json
+
+python scripts/prepare_public_dataset.py `
+  --manifest config/caucafall_manifest.json `
+  --output-dir data/processed `
+  --device cpu
+
+python scripts/train_temporal_gru.py `
+  --input data/processed/caucafall_train.jsonl `
+  --val-input data/processed/caucafall_val.jsonl `
+  --format sequence `
+  --sequence-len 10 `
+  --model-fps 20 `
+  --model-type gru `
+  --epochs 25 `
+  --max-fpr 0.0 `
+  --output models/temporal_gru_caucafall.pt `
+  --metrics-out output/temporal_gru_caucafall_metrics.json
+```
+
+For a final unbiased score, reserve a third set of whole subjects and pass its
+prepared JSONL with `--test-input`; it is loaded only after early stopping and
+threshold calibration. `--max-fpr` deliberately refuses a random window split
+and therefore requires `--val-input`.
+
+CAUCAFall is distributed under CC BY 4.0; retain the downloaded `SOURCE.json`
+and attribution metadata. Public-data models should initially run with
+`risk.ml_weight: 0.0` so their probabilities are logged without changing
+depth-confirmed D435i alerts.
 
 Latency note:
 - `temporal_model.infer_interval` controls how often temporal inference runs per track.

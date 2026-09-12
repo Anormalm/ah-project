@@ -6,3 +6,8 @@
 .venv/
 output/*.jsonl
 models/*.pt
+!models/temporal_gru_caucafall.pt
+data/raw/
+data/processed/
+config/caucafall_manifest.json
+output/temporal_*metrics.json

@@ -39,6 +39,15 @@ class FeatureVector(BaseModel):
     posture: Literal["lying", "sitting", "standing", "unknown"]
     bed_zone_distance: float
     lean_angle: float
+    pose_valid_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    body_height_px: float | None = Field(default=None, ge=0.0)
+    center_of_mass_3d_m: tuple[float, float, float] | None = None
+    velocity_3d_m_s: tuple[float, float, float] | None = None
+    acceleration_3d_m_s2: tuple[float, float, float] | None = None
+    depth_valid_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    camera_motion: bool = False
+    camera_gyro_peak_rad_s: float | None = None
+    camera_accel_delta_peak_m_s2: float | None = None
 
     model_config = ConfigDict(frozen=True)
 

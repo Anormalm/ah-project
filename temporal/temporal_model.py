@@ -135,6 +135,8 @@ class TorchTemporalInferenceEngine(InferenceEngine):
         state_dict = checkpoint
         feature_mean = None
         feature_std = None
+        decision_threshold = None
+        model_fps = None
         if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
             model_type = str(checkpoint.get("model_type", meta.model_type))
             if force_model_type is not None:
@@ -151,12 +153,17 @@ class TorchTemporalInferenceEngine(InferenceEngine):
             state_dict = checkpoint["model_state_dict"]
             feature_mean = checkpoint.get("feature_mean")
             feature_std = checkpoint.get("feature_std")
+            decision_threshold = checkpoint.get("decision_threshold")
+            model_fps = checkpoint.get("model_fps")
 
         self.model = _build_torch_model(torch, meta).to(device)
         self.model.load_state_dict(state_dict)
         self.model.eval()
         self.device = device
         self.meta = meta
+        self.required_sequence_len = meta.sequence_len
+        self.decision_threshold = None if decision_threshold is None else float(decision_threshold)
+        self.model_fps = None if model_fps is None else float(model_fps)
 
         if feature_mean is None or feature_std is None:
             self._feature_mean = None
@@ -191,23 +198,76 @@ class TemporalRiskModel:
         backend: InferenceEngine,
         sequence_len: int = 16,
         infer_interval: int = 1,
-        min_infer_steps: int = 2,
+        min_infer_steps: int | None = None,
+        model_fps: float | None = None,
     ) -> None:
         self.backend = backend
-        self.sequence_len = sequence_len
+        checkpoint_sequence_len = getattr(backend, "required_sequence_len", None)
+        if checkpoint_sequence_len is None:
+            self.sequence_len = int(sequence_len)
+            default_min_infer_steps = 2
+        else:
+            self.sequence_len = int(checkpoint_sequence_len)
+            if self.sequence_len < 2:
+                raise ValueError("checkpoint sequence_len must be at least 2")
+            default_min_infer_steps = self.sequence_len
+
         self.infer_interval = max(1, int(infer_interval))
-        self.min_infer_steps = max(2, int(min_infer_steps))
+        requested_min_infer_steps = default_min_infer_steps if min_infer_steps is None else int(min_infer_steps)
+        self.min_infer_steps = max(default_min_infer_steps, requested_min_infer_steps)
+
+        checkpoint_model_fps = getattr(backend, "model_fps", None)
+        selected_model_fps = checkpoint_model_fps if model_fps is None else model_fps
+        if selected_model_fps is not None:
+            selected_model_fps = float(selected_model_fps)
+            if not np.isfinite(selected_model_fps) or selected_model_fps <= 0.0:
+                raise ValueError("model_fps must be a finite positive number")
+        self.model_fps = selected_model_fps
+        self.decision_threshold = getattr(backend, "decision_threshold", None)
         self._infer_counter: dict[int, int] = {}
         self._cached_prob: dict[int, float] = {}
+
+    @property
+    def required_history_seconds(self) -> float | None:
+        if self.model_fps is None:
+            return None
+        return (self.sequence_len - 1) / self.model_fps
 
     @staticmethod
     def _posture_to_scalar(posture: str) -> float:
         mapping = {"unknown": 0.0, "standing": 0.2, "sitting": 0.6, "lying": 1.0}
         return mapping.get(posture, 0.0)
 
+    def _sample_sequence(self, sequence: Sequence[FeatureVector]) -> list[FeatureVector]:
+        samples = list(sequence)
+        if self.model_fps is None:
+            return samples[-self.sequence_len :]
+        if len(samples) < self.sequence_len:
+            return []
+
+        timestamps = np.asarray([sample.timestamp for sample in samples], dtype=np.float64)
+        if not np.all(np.isfinite(timestamps)) or np.any(np.diff(timestamps) < 0.0):
+            return []
+
+        end_timestamp = float(timestamps[-1])
+        start_timestamp = end_timestamp - float(self.required_history_seconds)
+        if timestamps[0] > start_timestamp + 1e-9:
+            return []
+
+        target_timestamps = start_timestamp + np.arange(self.sequence_len, dtype=np.float64) / self.model_fps
+        right_indices = np.searchsorted(timestamps, target_timestamps, side="left")
+        right_indices = np.clip(right_indices, 0, len(samples) - 1)
+        left_indices = np.maximum(right_indices - 1, 0)
+        choose_left = (
+            np.abs(target_timestamps - timestamps[left_indices])
+            <= np.abs(timestamps[right_indices] - target_timestamps)
+        )
+        nearest_indices = np.where(choose_left, left_indices, right_indices)
+        return [samples[int(index)] for index in nearest_indices]
+
     def _to_features(self, sequence: Sequence[FeatureVector]) -> np.ndarray:
         rows = []
-        for f in sequence[-self.sequence_len :]:
+        for f in self._sample_sequence(sequence):
             speed = float(np.hypot(f.velocity[0], f.velocity[1]))
             acc = float(np.hypot(f.acceleration[0], f.acceleration[1]))
             rows.append([

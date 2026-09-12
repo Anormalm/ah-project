@@ -1,0 +1,38 @@
+version: 1
+dataset: example_fall_dataset
+root: ../data/raw/example_fall_dataset
+sequence_len: 10
+window_stride: 1
+negative_guard_frames: 10
+default_fps: 25
+resize_width: 640
+resize_height: 480
+pose_input_size: 320
+min_keypoint_conf: 0.2
+min_pose_valid_ratio: 0.5
+min_pose_confidence: 0.2
+person_selection: largest
+kinematic_ema_alpha: 0.30
+max_kinematic_gap_sec: 0.4
+
+# Intervals are half-open. Keep every group_id (normally one subject) entirely
+# in one split. Frames outside intervals are deliberately not labelled.
+clips:
+  - clip_id: subject_01_normal
+    source: subject_01/normal.avi
+    source_type: video
+    split: train
+    group_id: subject_01
+    subject_id: 1
+    intervals:
+      - {label: 0, start_frame: 0, end_frame: 240}
+
+  - clip_id: subject_09_fall
+    source: subject_09/fall.avi
+    source_type: video
+    split: val
+    group_id: subject_09
+    subject_id: 9
+    intervals:
+      - {label: 0, start_frame: 0, end_frame: 100}
+      - {label: 1, start_frame: 100, end_frame: 180}

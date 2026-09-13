@@ -349,6 +349,20 @@ This starts the D435i pipeline and serves the local dashboard at
 `http://127.0.0.1:8000/dashboard`. Set `AH_DASHBOARD_CONFIG` before running
 `dashboard` to select another configuration.
 
+The D435i profile uses 1280x720 RGB and 640x480 depth at 15 FPS and aligns
+depth to color. It uses the validated 640px TensorRT pose engine by default. A
+stable USB 3 connection is recommended. To evaluate a 960px long-range engine,
+build it on the target Jetson with:
+
+```bash
+python scripts/export_jetson_tensorrt.py \
+  --weights models/yolo26s-pose.pt --imgsz 960 --precision fp16 \
+  --output models/yolo26s-pose-fp16-960.engine
+```
+
+After the export completes, set the D435i profile's `pose.model_path` to that
+engine and `pose.input_size` to `960`; do not point runtime at a partial export.
+
 For multiple connected cameras, replace `source: auto` with the D435i serial.
 Keep the camera IMU disabled for the initial fixed-mount deployment.
 

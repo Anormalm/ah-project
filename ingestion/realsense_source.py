@@ -27,11 +27,19 @@ class RealSenseSource:
         buffer_size: int = 1,
         frame_timeout_ms: int = 1000,
         enable_imu: bool = False,
+        color_width: int | None = None,
+        color_height: int | None = None,
+        depth_width: int | None = None,
+        depth_height: int | None = None,
         rs_module: Any | None = None,
     ) -> None:
         self.serial = None if serial in {None, "", "auto"} else str(serial)
         self.width = int(width)
         self.height = int(height)
+        self.color_width = int(color_width if color_width is not None else width)
+        self.color_height = int(color_height if color_height is not None else height)
+        self.depth_width = int(depth_width if depth_width is not None else width)
+        self.depth_height = int(depth_height if depth_height is not None else height)
         self.fps = int(fps)
         self.frame_timeout_ms = max(100, int(frame_timeout_ms))
         self.enable_imu = bool(enable_imu)
@@ -72,8 +80,12 @@ class RealSenseSource:
         config = rs.config()
         if self.serial:
             config.enable_device(self.serial)
-        config.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)
-        config.enable_stream(rs.stream.color, self.width, self.height, rs.format.bgr8, self.fps)
+        config.enable_stream(
+            rs.stream.depth, self.depth_width, self.depth_height, rs.format.z16, self.fps
+        )
+        config.enable_stream(
+            rs.stream.color, self.color_width, self.color_height, rs.format.bgr8, self.fps
+        )
         if self.enable_imu:
             config.enable_stream(rs.stream.accel)
             config.enable_stream(rs.stream.gyro)
@@ -156,4 +168,8 @@ def create_realsense_source(source: str | int, options: dict[str, Any], buffer_s
         buffer_size=buffer_size,
         frame_timeout_ms=int(options.get("frame_timeout_ms", 1000)),
         enable_imu=bool(options.get("enable_imu", False)),
+        color_width=int(options.get("color_width", options.get("width", 640))),
+        color_height=int(options.get("color_height", options.get("height", 480))),
+        depth_width=int(options.get("depth_width", options.get("width", 640))),
+        depth_height=int(options.get("depth_height", options.get("height", 480))),
     )

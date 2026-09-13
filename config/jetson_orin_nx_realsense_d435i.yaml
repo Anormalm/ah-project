@@ -16,9 +16,13 @@ streams:
 
 ingestion:
   realsense:
-    width: 640
-    height: 480
-    fps: 30
+    # Long-range profile: retain more RGB detail for the 960px pose engine,
+    # while using the D435i's stable VGA depth mode and aligning it to color.
+    color_width: 1280
+    color_height: 720
+    depth_width: 640
+    depth_height: 480
+    fps: 15
     frame_timeout_ms: 1000
     # Camera IMU is disabled initially; it measures camera motion, not patients.
     enable_imu: false
@@ -27,6 +31,11 @@ features:
   # Torso-center smoothing protects pixel derivatives from keypoint jitter at
   # the D435i's 30 FPS capture rate while retaining fast fall motion.
   center_ema_alpha: 0.25
+
+pose:
+  # Use the validated engine until the optional 960px long-range export exists.
+  model_path: models/yolo26s-pose-fp16-640.engine
+  input_size: 640
 
 rules:
   # Reject fragmentary skeletons as a fall source when a person crosses the

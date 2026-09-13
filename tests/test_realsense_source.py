@@ -17,6 +17,23 @@ def test_realsense_source_factory_defaults_to_first_device() -> None:
     assert source.enable_imu is False
 
 
+def test_realsense_source_supports_separate_color_and_depth_profiles() -> None:
+    source = create_realsense_source(
+        "auto",
+        {
+            "color_width": 1280,
+            "color_height": 720,
+            "depth_width": 640,
+            "depth_height": 480,
+            "fps": 15,
+        },
+        buffer_size=1,
+    )
+    assert (source.color_width, source.color_height) == (1280, 720)
+    assert (source.depth_width, source.depth_height) == (640, 480)
+    assert source.fps == 15
+
+
 def test_realsense_stream_type_is_valid() -> None:
     stream = StreamConfig(stream_id="d435i", type="realsense", source="auto")
     assert stream.type == "realsense"
@@ -27,6 +44,9 @@ def test_realsense_config_inherits_sota_profile() -> None:
     assert cfg["streams"][0]["type"] == "realsense"
     assert cfg["tracking"]["backend"] == "pose_kalman"
     assert cfg["ingestion"]["realsense"]["enable_imu"] is False
+    assert cfg["ingestion"]["realsense"]["color_width"] == 1280
+    assert cfg["ingestion"]["realsense"]["depth_width"] == 640
+    assert cfg["pose"]["input_size"] == 640
 
 
 def test_missing_sdk_has_actionable_error(monkeypatch) -> None:
